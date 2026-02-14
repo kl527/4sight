@@ -46,7 +46,6 @@ export default function PairingScreen() {
   // Auto-connect to first discovered device
   useEffect(() => {
     if (isScanning && hasDevices && !isConnecting && !isConnected) {
-      bt.stopScanning();
       bt.connect(bt.discoveredDevices[0].id);
     }
   }, [hasDevices, isScanning, isConnecting, isConnected]);
@@ -54,7 +53,7 @@ export default function PairingScreen() {
   // Navigate to tabs when connected
   useEffect(() => {
     if (isConnected) {
-      router.replace('/');
+      router.replace('/(tabs)');
     }
   }, [isConnected]);
 

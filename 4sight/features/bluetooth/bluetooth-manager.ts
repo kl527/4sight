@@ -348,16 +348,20 @@ class BluetoothManagerClass {
     if (!this.isBluetoothReady()) throw new Error("Bluetooth not ready");
     if (this.state.connectionState === "connected")
       throw new Error("Already connected");
+    if (this.state.connectionState === "connecting") return;
 
-    this.stopScanning();
     this.state.lastError = null;
 
     const device = this.state.discoveredDevices.find((d) => d.id === deviceId);
     const deviceName = device?.name || "Unknown";
 
+    // Set connecting state BEFORE stopping scan to prevent the scan-stop
+    // from briefly resetting connectionState to "disconnected" and
+    // re-triggering auto-connect.
     this.state.connectionState = "connecting";
     this.state.connectedDeviceId = deviceId;
     this.state.connectedDeviceName = deviceName;
+    this.stopScanning();
     this.emit({
       type: "connectionStateChanged",
       state: "connecting",

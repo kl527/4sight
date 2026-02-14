@@ -6,7 +6,7 @@ import 'react-native-reanimated';
 import { Colors } from '@/constants/theme';
 
 export const unstable_settings = {
-  anchor: '(tabs)',
+  initialRouteName: 'pairing',
 };
 
 const AppTheme = {
@@ -24,8 +24,9 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={AppTheme}>
       <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="pairing" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="dark" />
     </ThemeProvider>
