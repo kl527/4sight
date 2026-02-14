@@ -1,10 +1,11 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,12 +16,16 @@ import {
   BluetoothManager,
   type BluetoothManagerEvent,
 } from '@/features/bluetooth/bluetooth-manager';
+import { extractWithSignals, type WindowExtractionResult } from '@/features/feature-extraction';
+import { WindowResultView } from '@/components/window-result-view';
 
 export default function DataScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const colors = Colors[colorScheme];
   const bt = useBluetooth();
   const downloadingRef = useRef(false);
+  const [results, setResults] = useState<WindowExtractionResult[]>([]);
+  const [isExtracting, setIsExtracting] = useState(false);
 
   const isConnected = bt.connectionState === 'connected';
   const hasWindows = bt.uploadQueue.length > 0;
@@ -28,14 +33,19 @@ export default function DataScreen() {
   const handleDownloadAll = useCallback(() => {
     if (!isConnected || bt.uploadQueue.length === 0 || downloadingRef.current) return;
     downloadingRef.current = true;
+    setResults([]);
+    setIsExtracting(true);
 
     const queue = [...bt.uploadQueue];
     let idx = 0;
+    const collected: WindowExtractionResult[] = [];
 
     const downloadNext = () => {
       if (idx >= queue.length) {
         downloadingRef.current = false;
-        Alert.alert('Done', `Downloaded ${queue.length} window(s) from watch.`);
+        setResults(collected);
+        setIsExtracting(false);
+        Alert.alert('Done', `Downloaded and analyzed ${queue.length} window(s).`);
         return;
       }
 
@@ -43,6 +53,16 @@ export default function DataScreen() {
       const unsub = BluetoothManager.addEventListener((event: BluetoothManagerEvent) => {
         if (event.type === 'downloadComplete' && event.result.windowId === windowId) {
           unsub();
+
+          // Run feature extraction on the downloaded binary data
+          const extraction = extractWithSignals(
+            event.result.ppgData,
+            event.result.accelData,
+            windowId,
+            parseInt(windowId, 10) || Date.now()
+          );
+          collected.push(extraction);
+
           BluetoothManager.confirmUpload(windowId);
           idx++;
           // Small delay to let firmware finish storage cleanup before next download
@@ -51,6 +71,8 @@ export default function DataScreen() {
         if (event.type === 'error') {
           unsub();
           downloadingRef.current = false;
+          setResults(collected);
+          setIsExtracting(false);
           Alert.alert('Error', `Failed on window ${windowId}`);
         }
       });
@@ -181,6 +203,40 @@ export default function DataScreen() {
             )}
           </View>
 
+          {/* ── Extraction Results ── */}
+          {isExtracting && (
+            <View style={[styles.section, styles.extractingRow]}>
+              <ActivityIndicator size="small" color={colors.tint} />
+              <Text style={[styles.sectionDesc, { color: colors.icon, marginBottom: 0 }]}>
+                Extracting features...
+              </Text>
+            </View>
+          )}
+
+          {results.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="analytics" size={22} color={colors.tint} />
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>
+                  Analysis Results
+                </Text>
+              </View>
+              <Text style={[styles.sectionDesc, { color: colors.icon }]}>
+                {results.length} window(s) analyzed
+              </Text>
+
+              {results.map((result) => (
+                <WindowResultView
+                  key={result.windowId}
+                  result={result}
+                  tintColor={colors.tint}
+                  textColor={colors.text}
+                  subtextColor={colors.icon}
+                />
+              ))}
+            </View>
+          )}
+
           {/* ── Share PPG Data ── */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -293,4 +349,6 @@ const styles = StyleSheet.create({
 
   emptySection: { alignItems: 'center', paddingVertical: 16 },
   emptySectionText: { fontSize: 14 },
+
+  extractingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
