@@ -2,7 +2,7 @@ remember to always do `git pull --rebase` before pushing because we're just all 
 
 if you're committing and pushing any backend changes, you should use gh cli to watch GHA cd action and make sure it passes.
 
-if you're debugging prod issues, use `uv run modal` and `source ~/.env.local && npx wrangler` clis, e.g., `source ~/.env.local && npx wrangler containers logs foresight-backend-container`
+if you're debugging prod issues, use `uv run modal` and `source ~/.env.local && npx wrangler` clis, e.g., `source ~/.env.local && npx wrangler containers logs foresight-backend`
 
 the way we test the websocket endpoint in prod is with `uv run --with websockets ./backend/scripts/replay_video_to_vision_ws.py --url https://foresight-backend.jun-871.workers.dev --video /home/ben/Downloads/vid.mp4 --magic-word <ask_the_user>`
 
