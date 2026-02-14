@@ -9,9 +9,14 @@
 //     [uint32 syncTimeMs][int16 x,y,z × 25 samples] (Q13: g × 8192)
 //
 // BLE commands (JSON over UART, raw or X10-framed):
-//   {"type":"start_recording"}  - begin continuous 1-min window chain
-//   {"type":"stop_recording"}   - stop recording, return to idle
-//   {"type":"get_status"}       - query current state
+//   {"type":"start_recording"}               - begin continuous 1-min window chain
+//   {"type":"stop_recording"}                - stop recording, return to idle
+//   {"type":"get_status"}                    - query current state
+//   {"type":"get_queue"}                     - list windowIds ready for upload
+//   {"type":"get_window_data","windowId":"X"} - stream binary data for window X
+//   {"type":"next_chunk"}                    - resume chunk pump (flow control)
+//   {"type":"confirm_upload","windowId":"X"} - delete window X after successful upload
+//   {"type":"delete_all_windows"}            - erase all data files + clear queue
 
 // ============================================
 // Section 1: Constants & Config
@@ -27,6 +32,10 @@ var CONFIG = {
   ACCEL_SYNC_MS: 2000,
   WINDOW_MS: 60000,
   BASE_PATH: "4s",
+  QUEUE_FILE: "4s_queue.json",
+  BLE_CHUNK_SIZE: 20,
+  BLE_CHUNK_DELAY: 25,
+  BLE_WATCHDOG_MS: 60000,
 };
 
 // ============================================
@@ -177,6 +186,38 @@ function flushAccel(syncTime) {
 }
 
 // ============================================
+// Section 4b: Upload Queue
+// ============================================
+function getUploadQueue() {
+  var q = Storage.readJSON(CONFIG.QUEUE_FILE, true);
+  return q || [];
+}
+
+function addToUploadQueue(windowId) {
+  var queue = getUploadQueue();
+  if (queue.indexOf(windowId) === -1) {
+    queue.push(windowId);
+    Storage.writeJSON(CONFIG.QUEUE_FILE, queue);
+  }
+}
+
+function removeFromUploadQueue(windowId) {
+  var queue = getUploadQueue();
+  var idx = queue.indexOf(windowId);
+  if (idx > -1) {
+    queue.splice(idx, 1);
+    Storage.writeJSON(CONFIG.QUEUE_FILE, queue);
+  }
+}
+
+function deleteWindow(windowId) {
+  var base = CONFIG.BASE_PATH + "_" + windowId;
+  Storage.erase(base + "_p.bin");
+  Storage.erase(base + "_a.bin");
+  removeFromUploadQueue(windowId);
+}
+
+// ============================================
 // Section 5: Sensor Callbacks
 // ============================================
 function onHRM(d) {
@@ -276,6 +317,9 @@ function stopWindow() {
     Storage.write(base + "_a.bin", accelSlice);
   }
 
+  // Queue for upload
+  addToUploadQueue(state.winId);
+
   // Free buffers
   state.ppgData = null;
   state.accelData = null;
@@ -304,9 +348,127 @@ function updateDisplay() {
 }
 
 // ============================================
+// Section 7b: BLE Binary Transfer
+// ============================================
+var bleTransferActive = false;
+var bleTransferId = 0;
+var bleChunkState = null;
+var bleWatchdog = null;
+var blePumpTimer = null;
+
+function cancelBleTransfer(reason) {
+  if (blePumpTimer) { clearTimeout(blePumpTimer); blePumpTimer = null; }
+  if (bleWatchdog) { clearTimeout(bleWatchdog); bleWatchdog = null; }
+  bleTransferActive = false;
+  bleTransferId++;
+  bleChunkState = null;
+}
+
+function sendEndMarker(windowId) {
+  Bluetooth.println(JSON.stringify({ type: "end", windowId: windowId }));
+}
+
+function sendNextChunk() {
+  if (!bleTransferActive || !bleChunkState) return;
+  var st = bleChunkState;
+  var myId = bleTransferId;
+
+  if (st.offset >= st.length) {
+    // All data sent
+    var wid = st.windowId;
+    setTimeout(function () {
+      if (bleTransferId !== myId) return;
+      sendEndMarker(wid);
+      cancelBleTransfer("complete");
+    }, 50);
+    return;
+  }
+
+  var end = Math.min(st.offset + CONFIG.BLE_CHUNK_SIZE, st.length);
+  var chunk = new Uint8Array(st.bytes.buffer, st.offset, end - st.offset);
+
+  try {
+    var written = Bluetooth.write(chunk);
+    if (written !== false && written !== 0) {
+      st.offset += chunk.length;
+      // Schedule next chunk
+      blePumpTimer = setTimeout(function () {
+        blePumpTimer = null;
+        if (bleTransferId === myId) sendNextChunk();
+      }, CONFIG.BLE_CHUNK_DELAY);
+    } else {
+      // Buffer full — retry after longer delay
+      blePumpTimer = setTimeout(function () {
+        blePumpTimer = null;
+        if (bleTransferId === myId) sendNextChunk();
+      }, 100);
+    }
+  } catch (e) {
+    cancelBleTransfer("tx_error");
+    Bluetooth.println(JSON.stringify({
+      type: "error", cmd: "send_data", windowId: st.windowId, message: "tx_failed"
+    }));
+  }
+}
+
+function sendWindowData(windowId) {
+  cancelBleTransfer("new_transfer");
+
+  var base = CONFIG.BASE_PATH + "_" + windowId;
+  var ppgBuf = Storage.readArrayBuffer(base + "_p.bin");
+  var accelBuf = Storage.readArrayBuffer(base + "_a.bin");
+
+  var ppgLen = ppgBuf ? ppgBuf.byteLength : 0;
+  var accelLen = accelBuf ? accelBuf.byteLength : 0;
+  var totalLength = ppgLen + accelLen;
+
+  // Send JSON header
+  Bluetooth.println(JSON.stringify({
+    type: "window_data",
+    windowId: windowId,
+    ppgLen: ppgLen,
+    accelLen: accelLen,
+    totalLength: totalLength,
+  }));
+
+  if (totalLength === 0) {
+    setTimeout(function () {
+      sendEndMarker(windowId);
+    }, 100);
+    return;
+  }
+
+  // Concatenate ppg + accel into one contiguous buffer for simple chunk pump
+  var combined = new Uint8Array(totalLength);
+  if (ppgBuf) combined.set(new Uint8Array(ppgBuf), 0);
+  if (accelBuf) combined.set(new Uint8Array(accelBuf), ppgLen);
+
+  bleTransferActive = true;
+  bleTransferId++;
+  bleChunkState = {
+    windowId: windowId,
+    bytes: combined,
+    offset: 0,
+    length: totalLength,
+  };
+
+  // Watchdog: auto-cancel stalled transfers
+  var myId = bleTransferId;
+  bleWatchdog = setTimeout(function () {
+    if (bleTransferActive && bleTransferId === myId) {
+      cancelBleTransfer("watchdog");
+    }
+  }, CONFIG.BLE_WATCHDOG_MS);
+
+  // Start pumping
+  sendNextChunk();
+}
+
+// ============================================
 // Section 8: BLE Command Handler
 // ============================================
 function sendBleResponse(obj) {
+  if (bleTransferActive) return;
   Bluetooth.println(JSON.stringify(obj));
 }
 
@@ -404,7 +566,58 @@ function handleCommand(json) {
         chunk: state.chunkIndex,
         battery: E.getBattery(),
         winId: state.winId,
+        queueLen: getUploadQueue().length,
       });
+      break;
+
+    case "get_queue":
+      var queue = getUploadQueue();
+      sendBleResponse({
+        type: "queue",
+        windows: queue,
+        count: queue.length,
+      });
+      break;
+
+    case "get_window_data":
+      if (!cmd.windowId) {
+        sendBleResponse({ type: "error", cmd: "get_window_data", message: "missing_windowId" });
+        break;
+      }
+      sendWindowData(String(cmd.windowId));
+      break;
+
+    case "next_chunk":
+      sendNextChunk();
+      break;
+
+    case "confirm_upload":
+      if (!cmd.windowId) {
+        sendBleResponse({ type: "error", cmd: "confirm_upload", message: "missing_windowId" });
+        break;
+      }
+      var wid = String(cmd.windowId);
+      deleteWindow(wid);
+      // Also erase any leftover files with this prefix
+      var prefix = CONFIG.BASE_PATH + "_" + wid;
+      var allFiles = Storage.list();
+      for (var i = 0; i < allFiles.length; i++) {
+        if (allFiles[i].indexOf(prefix) === 0) Storage.erase(allFiles[i]);
+      }
+      sendBleResponse({ type: "ack", cmd: "confirm_upload", windowId: wid });
+      break;
+
+    case "delete_all_windows":
+      var allFiles2 = Storage.list();
+      var deletedCount = 0;
+      for (var j = 0; j < allFiles2.length; j++) {
+        if (allFiles2[j].indexOf("4s_") === 0 && allFiles2[j] !== CONFIG.QUEUE_FILE) {
+          Storage.erase(allFiles2[j]);
+          deletedCount++;
+        }
+      }
+      Storage.writeJSON(CONFIG.QUEUE_FILE, []);
+      sendBleResponse({ type: "ack", cmd: "delete_all_windows", deletedCount: deletedCount });
       break;
 
     default:
