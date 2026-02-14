@@ -1,5 +1,7 @@
 remember to always do `git pull --rebase` before pushing because we're just all committing to trunk
 
+if you're committing and pushing any backend changes, you should use gh cli to watch GHA cd action and make sure it passes.
+
 # 4sight — hackathon project
 
 AI health agent that uses real-time biometrics to scare people into being healthy. Think Duolingo's guilt-tripping but for your lifespan. Target demo: biohackers & Bryan Johnson types.
