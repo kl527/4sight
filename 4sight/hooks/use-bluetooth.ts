@@ -16,7 +16,14 @@ export function useBluetooth() {
     }
 
     const unsubscribe = BluetoothManager.addEventListener((_event: BluetoothManagerEvent) => {
-      setState(BluetoothManager.getState());
+      const next = BluetoothManager.getState();
+      setState((prev) => {
+        const keys = Object.keys(next) as (keyof BluetoothManagerState)[];
+        for (const key of keys) {
+          if (prev[key] !== next[key]) return next;
+        }
+        return prev;
+      });
     });
 
     // Sync initial state

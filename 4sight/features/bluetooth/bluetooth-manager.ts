@@ -42,6 +42,9 @@ const Config = {
   MAX_CONTROL_LINE_BYTES: 4 * 1024,
   AUTO_SYNC_INTER_WINDOW_DELAY_MS: 1_000,
   AUTO_SYNC_RETRY_DELAY_MS: 5_000,
+  RECONNECT_MAX_ATTEMPTS: 10,
+  RECONNECT_BASE_DELAY_MS: 1_000,
+  RECONNECT_MAX_DELAY_MS: 15_000,
 } as const;
 
 const X_NOT_DEFINED_REGEX =
@@ -222,6 +225,12 @@ class BluetoothManagerClass {
   // Connection timeout
   private connectionTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  // Reconnection state
+  private userInitiatedDisconnect = false;
+  private reconnectAttempts = 0;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private lastConnectedDeviceId: string | null = null;
+
   // Write serialization — ensures only one writeToBle runs at a time
   private writeQueue: Promise<void> = Promise.resolve();
   // Default framing mode; falls back to raw JSON if watch REPL reports X() missing
@@ -234,6 +243,7 @@ class BluetoothManagerClass {
   private autoSyncQueue: string[] = [];
   private autoSyncTotalWindows = 0;
   private autoSyncCompletedWindows = 0;
+  private pendingAutoSyncStart = false;
 
   // AppState (iOS background handling)
   private appStateSubscription: { remove: () => void } | null = null;
@@ -273,6 +283,7 @@ class BluetoothManagerClass {
   }
 
   destroy(): void {
+    this.stopReconnecting();
     this.stopStatusPolling();
     this.clearConnectionTimeout();
     this.cancelTransfer();
@@ -322,6 +333,7 @@ class BluetoothManagerClass {
       this.handleError("BLUETOOTH_UNAVAILABLE", "Bluetooth not ready");
       return;
     }
+    this.stopReconnecting();
     if (this.state.isScanning) return;
 
     this.state.isScanning = true;
@@ -330,7 +342,7 @@ class BluetoothManagerClass {
     this.log("Scanning...");
 
     this.manager.startDeviceScan(
-      null,
+      [NUS_SERVICE_UUID],
       { allowDuplicates: false },
       (error: BleError | null, device: Device | null) => {
         if (error) {
@@ -384,6 +396,8 @@ class BluetoothManagerClass {
       throw new Error("Already connected");
     if (this.state.connectionState === "connecting") return;
 
+    this.stopReconnecting();
+    this.userInitiatedDisconnect = false;
     this.state.lastError = null;
 
     const device = this.state.discoveredDevices.find((d) => d.id === deviceId);
@@ -464,6 +478,7 @@ class BluetoothManagerClass {
       );
 
       this.clearConnectionTimeout();
+      this.lastConnectedDeviceId = deviceId;
       this.state.connectionState = "connected";
       this.emit({
         type: "connectionStateChanged",
@@ -496,6 +511,8 @@ class BluetoothManagerClass {
 
   async disconnect(): Promise<void> {
     if (!this.connectedDevice) return;
+    this.userInitiatedDisconnect = true;
+    this.stopReconnecting();
     this.log("Disconnecting...");
     this.stopStatusPolling();
     this.clearConnectionTimeout();
@@ -510,9 +527,16 @@ class BluetoothManagerClass {
 
   private handleDisconnection(error?: BleError): void {
     this.log(error ? `Disconnected: ${error.message}` : "Disconnected");
+    const deviceId = this.lastConnectedDeviceId;
+    const wasUserInitiated = this.userInitiatedDisconnect;
     this.cleanupConnection();
     this.state.connectionState = "disconnected";
     this.emit({ type: "connectionStateChanged", state: "disconnected" });
+
+    // Attempt automatic reconnection for unexpected disconnects
+    if (!wasUserInitiated && deviceId && this.isBluetoothReady()) {
+      this.startReconnecting(deviceId);
+    }
   }
 
   private handleConnectionTimeout(deviceId: string): void {
@@ -527,10 +551,12 @@ class BluetoothManagerClass {
   private cleanupConnection(): void {
     this.stopStatusPolling();
     this.cancelTransfer();
+    this.transferPausedInBackground = false;
     this.autoSyncInProgress = false;
     this.autoSyncQueue = [];
     this.autoSyncTotalWindows = 0;
     this.autoSyncCompletedWindows = 0;
+    this.pendingAutoSyncStart = false;
     this.state.isAutoSyncing = false;
     this.notificationSubscription?.remove();
     this.notificationSubscription = null;
@@ -640,10 +666,15 @@ class BluetoothManagerClass {
     data: string,
     timeoutMs = 5000,
   ): Promise<void> {
+    let timeoutId: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("BLE write timeout")), timeoutMs);
+      timeoutId = setTimeout(() => reject(new Error("BLE write timeout")), timeoutMs);
     });
-    await Promise.race([characteristic.writeWithoutResponse(data), timeout]);
+    try {
+      await Promise.race([characteristic.writeWithoutResponse(data), timeout]);
+    } finally {
+      clearTimeout(timeoutId!);
+    }
   }
 
   // ============================================================================
@@ -758,18 +789,23 @@ class BluetoothManagerClass {
   }
 
   private handleJsonLine(line: string): void {
-    // Handle concatenated JSON objects
-    if (line.includes("}{")) {
-      const parts = line.split("}{");
-      for (let i = 0; i < parts.length; i++) {
-        let s = parts[i];
-        if (i > 0) s = "{" + s;
-        if (i < parts.length - 1) s += "}";
-        this.parseAndHandle(s);
-      }
+    // Handle concatenated JSON objects using brace-depth tracking
+    if (!line.includes("}{")) {
+      this.parseAndHandle(line);
       return;
     }
-    this.parseAndHandle(line);
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === "{") depth++;
+      else if (line[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          this.parseAndHandle(line.substring(start, i + 1));
+          start = i + 1;
+        }
+      }
+    }
   }
 
   private parseAndHandle(jsonStr: string): void {
@@ -925,6 +961,14 @@ class BluetoothManagerClass {
       this.log(`Queue: ${windows.length} windows`);
     }
     this.emit({ type: "queueUpdated", windows });
+
+    // If sync_ready set the flag, now that the queue is populated, start auto-sync
+    if (this.pendingAutoSyncStart) {
+      this.pendingAutoSyncStart = false;
+      if (!this.autoSyncInProgress && !this.state.isDownloading && windows.length > 0) {
+        this.startAutoSync();
+      }
+    }
   }
 
   // ============================================================================
@@ -1334,8 +1378,9 @@ class BluetoothManagerClass {
     if (!this.autoSyncEnabled || queueLen === 0) return;
     if (this.autoSyncInProgress || this.state.isDownloading) return;
 
+    // Set flag so startAutoSync fires once the queue response arrives
+    this.pendingAutoSyncStart = true;
     this.requestQueue();
-    setTimeout(() => this.startAutoSync(), 500);
   }
 
   private startAutoSync(): void {
@@ -1489,8 +1534,12 @@ class BluetoothManagerClass {
     } else {
       this.transferPausedInBackground = false;
 
-      // If not downloading and auto-sync is enabled, check for queued windows
-      if (!this.state.isDownloading && this.autoSyncEnabled) {
+      if (this.autoSyncInProgress && !this.state.isDownloading) {
+        // Auto-sync stalled in background (setTimeout didn't fire) — resume it
+        this.log("Foreground resume: resuming stalled auto-sync");
+        setTimeout(() => this.downloadNextInAutoSync(), 500);
+      } else if (!this.state.isDownloading && this.autoSyncEnabled) {
+        // If not downloading and auto-sync is enabled, check for queued windows
         setTimeout(() => {
           if (
             !this.autoSyncInProgress &&
@@ -1503,6 +1552,67 @@ class BluetoothManagerClass {
         }, 1_000);
       }
     }
+  }
+
+  // ============================================================================
+  // RECONNECTION
+  // ============================================================================
+
+  private startReconnecting(deviceId: string): void {
+    this.reconnectAttempts = 0;
+    this.log(`Starting auto-reconnect to ${deviceId}`);
+    this.scheduleReconnectAttempt(deviceId);
+  }
+
+  private scheduleReconnectAttempt(deviceId: string): void {
+    if (this.reconnectAttempts >= Config.RECONNECT_MAX_ATTEMPTS) {
+      this.log(`Auto-reconnect gave up after ${this.reconnectAttempts} attempts`);
+      this.reconnectAttempts = 0;
+      return;
+    }
+
+    const delay = Math.min(
+      Config.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+      Config.RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectAttempts++;
+    this.log(`Auto-reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
+
+    this.reconnectTimeoutId = setTimeout(async () => {
+      this.reconnectTimeoutId = null;
+      if (
+        this.state.connectionState !== "disconnected" ||
+        !this.isBluetoothReady() ||
+        !this.manager
+      ) {
+        return;
+      }
+
+      try {
+        // Add as a discovered device so connect() can proceed
+        if (!this.state.discoveredDevices.some((d) => d.id === deviceId)) {
+          this.state.discoveredDevices.push({
+            id: deviceId,
+            name: "Bangle.js",
+            rssi: -100,
+          });
+        }
+        await this.connect(deviceId);
+        this.log("Auto-reconnect succeeded");
+        this.reconnectAttempts = 0;
+      } catch {
+        this.log(`Auto-reconnect attempt ${this.reconnectAttempts} failed`);
+        this.scheduleReconnectAttempt(deviceId);
+      }
+    }, delay);
+  }
+
+  stopReconnecting(): void {
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+    this.reconnectAttempts = 0;
   }
 
   // ============================================================================
