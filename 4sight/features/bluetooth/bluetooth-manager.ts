@@ -29,12 +29,25 @@ const Config = {
   CONNECTION_TIMEOUT_MS: 15_000,
   STATUS_POLL_INTERVAL_MS: 3_000,
   QUEUE_POLL_EVERY_TICKS: 2,
-  DOWNLOAD_TIMEOUT_MS: 60_000,
+  DOWNLOAD_HEADER_TIMEOUT_MS: 10_000,
+  DOWNLOAD_END_MARKER_TIMEOUT_MS: 3_000,
+  DOWNLOAD_STALL_BASE_MS: 30_000,
+  DOWNLOAD_STALL_PER_200_BYTES_MS: 1_000,
+  DOWNLOAD_STALL_MAX_MS: 120_000,
+  DOWNLOAD_PARTIAL_RATIO_THRESHOLD: 0.9,
   MAX_CONTROL_LINE_BYTES: 4 * 1024,
 } as const;
 
 const X_NOT_DEFINED_REGEX =
   /ReferenceError:\s*["']?X["']?\s+is\s+not\s+defined/i;
+const XON = 0x11;
+const XOFF = 0x13;
+const OPTIONAL_V2_COMMANDS = new Set([
+  "set_mtu",
+  "cancel_transfer",
+  "next_chunk",
+  "binary_ack",
+]);
 
 // ============================================================================
 // TYPES
@@ -78,6 +91,15 @@ export interface TransferResult {
   accelLen: number;
 }
 
+export interface PartialTransferResult {
+  windowId: string;
+  bytesReceived: number;
+  totalBytes: number;
+  ppgData: Uint8Array;
+  accelData: Uint8Array;
+  reason: string;
+}
+
 export interface BluetoothManagerState {
   bluetoothState: BluetoothState;
   connectionState: ConnectionState;
@@ -109,6 +131,7 @@ export type BluetoothManagerEvent =
       totalBytes: number;
       percentage: number;
     }
+  | { type: "downloadPartial"; result: PartialTransferResult }
   | { type: "downloadComplete"; result: TransferResult }
   | {
       type: "error";
@@ -123,6 +146,10 @@ type FourSightCommand =
   | { type: "stop_recording" }
   | { type: "get_status" }
   | { type: "get_queue" }
+  | { type: "set_mtu"; mtu: number; payload: number }
+  | { type: "cancel_transfer" }
+  | { type: "next_chunk"; windowId: string }
+  | { type: "binary_ack"; windowId: string; bytesReceived: number }
   | { type: "get_window_data"; windowId: string }
   | { type: "confirm_upload"; windowId: string }
   | { type: "delete_all_windows" };
@@ -162,13 +189,21 @@ class BluetoothManagerClass {
 
   // Binary transfer state
   private transferActive = false;
+  private transferIsV2 = false;
+  private transferHeaderReceived = false;
+  private transferAckSent = false;
+  private transferRequestedWindowId: string | null = null;
   private transferWindowId: string | null = null;
   private transferPpgLen = 0;
   private transferAccelLen = 0;
   private transferTotalLen = 0;
+  private transferChunkSize: number = 20;
+  private transferStallTimeoutMs: number = Config.DOWNLOAD_STALL_BASE_MS;
   private transferBuffer: Uint8Array = new Uint8Array(0);
   private transferOffset = 0;
-  private transferTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private transferHeaderTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private transferStallTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private transferEndTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Status polling
   private statusPollIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -399,6 +434,9 @@ class BluetoothManagerClass {
       });
       this.log(`Connected to ${deviceName}`);
 
+      // Best-effort: advertise negotiated MTU payload to firmware (ignored by legacy firmware).
+      this.sendSetMtu();
+
       // Start polling
       this.startStatusPolling();
       setTimeout(() => {
@@ -480,6 +518,13 @@ class BluetoothManagerClass {
   // ============================================================================
   // COMMAND SENDING
   // ============================================================================
+
+  private sendSetMtu(): void {
+    const mtu = this.negotiatedMtu || 23;
+    const payload = Math.max(20, mtu - 3);
+    this.log(`Sending set_mtu: mtu=${mtu}, payload=${payload}`);
+    this.sendCommand({ type: "set_mtu", mtu, payload });
+  }
 
   sendCommand(command: FourSightCommand): void {
     if (!this.connectedDevice) {
@@ -581,17 +626,30 @@ class BluetoothManagerClass {
   }
 
   private appendToControlBuffer(data: Uint8Array): void {
-    if (this.controlBufferLength + data.length > this.controlBuffer.length) {
+    let filteredLen = 0;
+    for (let i = 0; i < data.length; i++) {
+      const b = data[i];
+      if (b === XON || b === XOFF) continue;
+      filteredLen++;
+    }
+    if (filteredLen === 0) return;
+
+    if (this.controlBufferLength + filteredLen > this.controlBuffer.length) {
       const newSize = Math.max(
         this.controlBuffer.length * 2,
-        this.controlBufferLength + data.length + 1024,
+        this.controlBufferLength + filteredLen + 1024,
       );
       const newBuf = new Uint8Array(newSize);
       newBuf.set(this.controlBuffer.subarray(0, this.controlBufferLength));
       this.controlBuffer = newBuf;
     }
-    this.controlBuffer.set(data, this.controlBufferLength);
-    this.controlBufferLength += data.length;
+    let w = this.controlBufferLength;
+    for (let i = 0; i < data.length; i++) {
+      const b = data[i];
+      if (b === XON || b === XOFF) continue;
+      this.controlBuffer[w++] = b;
+    }
+    this.controlBufferLength = w;
   }
 
   private processControlBuffer(): void {
@@ -695,6 +753,12 @@ class BluetoothManagerClass {
       case "window_data":
         this.handleWindowDataHeader(msg);
         break;
+      case "transfer_progress":
+        this.handleTransferProgress(msg);
+        break;
+      case "ping":
+        this.handleTransferPing(msg);
+        break;
       case "end":
         this.handleTransferEnd(msg);
         break;
@@ -702,7 +766,7 @@ class BluetoothManagerClass {
         this.handleAck(msg);
         break;
       case "error":
-        this.log(`Device error: cmd=${msg.cmd}, message=${msg.message}`);
+        this.handleDeviceError(msg);
         break;
       default:
         this.log(`Unknown response type: ${msg.type}`);
@@ -754,6 +818,50 @@ class BluetoothManagerClass {
     }
   }
 
+  private handleTransferProgress(msg: Record<string, unknown>): void {
+    if (!this.state.isDownloading) return;
+    const windowId = String(msg.windowId ?? this.transferWindowId ?? "");
+    const bytesSent =
+      typeof msg.bytesSent === "number" ? msg.bytesSent : undefined;
+    const totalBytes =
+      typeof msg.totalBytes === "number" ? msg.totalBytes : undefined;
+    this.log(
+      `transfer_progress: windowId=${windowId}, bytesSent=${bytesSent ?? "?"}, total=${totalBytes ?? "?"}`,
+    );
+  }
+
+  private handleTransferPing(msg: Record<string, unknown>): void {
+    if (!this.state.isDownloading) return;
+    const windowId = String(msg.windowId ?? this.transferWindowId ?? "");
+    this.log(`transfer_ping: windowId=${windowId}`);
+  }
+
+  private handleDeviceError(msg: Record<string, unknown>): void {
+    const cmd = typeof msg.cmd === "string" ? msg.cmd : "unknown";
+    const message = typeof msg.message === "string" ? msg.message : "unknown";
+
+    if (
+      OPTIONAL_V2_COMMANDS.has(cmd) &&
+      (message === "unknown_command" || message === "missing_type")
+    ) {
+      this.log(`Ignoring optional v2 command error: cmd=${cmd}, message=${message}`);
+      return;
+    }
+
+    this.log(`Device error: cmd=${cmd}, message=${message}`);
+
+    if (cmd === "get_window_data" && this.state.isDownloading) {
+      this.handleTransferFailure(
+        "device_error",
+        `Device rejected get_window_data: ${message}`,
+        true,
+      );
+      return;
+    }
+
+    this.handleError("DEVICE_ERROR", `${cmd}: ${message}`);
+  }
+
   private handleQueueResponse(msg: Record<string, unknown>): void {
     const windows = Array.isArray(msg.windows) ? (msg.windows as string[]) : [];
     const prevLen = this.state.uploadQueue.length;
@@ -769,59 +877,73 @@ class BluetoothManagerClass {
   // ============================================================================
 
   private handleWindowDataHeader(msg: Record<string, unknown>): void {
-    if (this.transferActive) {
-      this.log("Transfer already active, ignoring header");
+    const headerWindowId = String(msg.windowId ?? "");
+    const expectedWindowId = this.transferRequestedWindowId ?? headerWindowId;
+    if (!this.state.isDownloading) {
+      this.log(`Ignoring unexpected transfer header for ${headerWindowId}`);
       return;
     }
-    const windowId = String(msg.windowId ?? "");
-    const ppgLen = typeof msg.ppgLen === "number" ? msg.ppgLen : 0;
-    const accelLen = typeof msg.accelLen === "number" ? msg.accelLen : 0;
-    const totalLength =
-      typeof msg.totalLength === "number" ? msg.totalLength : ppgLen + accelLen;
+    if (expectedWindowId && headerWindowId && expectedWindowId !== headerWindowId) {
+      this.handleTransferFailure(
+        "header_mismatch",
+        `Header windowId mismatch: expected=${expectedWindowId}, actual=${headerWindowId}`,
+        true,
+      );
+      return;
+    }
 
-    this.log(
-      `Transfer header: windowId=${windowId}, ppg=${ppgLen}, accel=${accelLen}, total=${totalLength}`,
+    const ppgLen =
+      typeof msg.ppgLen === "number" ? Math.max(0, msg.ppgLen) : 0;
+    const accelLen =
+      typeof msg.accelLen === "number" ? Math.max(0, msg.accelLen) : 0;
+    const totalLength = Math.max(
+      0,
+      typeof msg.totalLength === "number" ? msg.totalLength : ppgLen + accelLen,
     );
+    const protocolVersion =
+      typeof msg.protocolVersion === "number" ? msg.protocolVersion : 1;
+    const chunkSize =
+      typeof msg.chunkSize === "number" && msg.chunkSize > 0
+        ? msg.chunkSize
+        : Math.max(20, (this.negotiatedMtu || 23) - 3);
 
-    this.transferWindowId = windowId;
+    this.clearTransferHeaderTimeout();
+    this.transferHeaderReceived = true;
+    this.transferIsV2 = protocolVersion >= 2;
+    this.transferAckSent = false;
+    this.transferWindowId = expectedWindowId || headerWindowId || "";
     this.transferPpgLen = ppgLen;
     this.transferAccelLen = accelLen;
     this.transferTotalLen = totalLength;
-
-    if (totalLength === 0) {
-      // Empty window — wait for end marker
-      return;
-    }
-
-    this.transferActive = true;
+    this.transferChunkSize = chunkSize;
+    this.transferStallTimeoutMs = this.computeTransferStallTimeoutMs(totalLength);
     this.transferBuffer = new Uint8Array(totalLength);
     this.transferOffset = 0;
+    this.transferActive = totalLength > 0;
 
-    // Watchdog timeout
-    this.transferTimeoutId = setTimeout(() => {
-      this.log(`Transfer timeout for ${windowId}`);
-      this.cancelTransfer();
-      this.state.isDownloading = false;
-      this.startStatusPolling();
-    }, Config.DOWNLOAD_TIMEOUT_MS);
+    this.log(
+      `Transfer header: windowId=${this.transferWindowId}, protocol=${protocolVersion}, ppg=${ppgLen}, accel=${accelLen}, total=${totalLength}, chunkSize=${this.transferChunkSize}`,
+    );
+
+    if (totalLength > 0) {
+      this.resetTransferStallTimeout();
+    } else {
+      this.startTransferEndTimeout();
+    }
+
+    if (this.transferIsV2 && this.transferWindowId) {
+      this.sendCommand({ type: "next_chunk", windowId: this.transferWindowId });
+    }
   }
 
   private handleTransferData(data: Uint8Array): void {
     if (!this.transferActive) return;
-
     const remaining = this.transferTotalLen - this.transferOffset;
-    if (data.length <= remaining) {
-      this.transferBuffer.set(data, this.transferOffset);
-      this.transferOffset += data.length;
-    } else {
-      // Some binary, some control data mixed in
-      this.transferBuffer.set(data.subarray(0, remaining), this.transferOffset);
-      this.transferOffset += remaining;
-      // Route leftover to control buffer
-      const leftover = data.subarray(remaining);
-      this.transferActive = false;
-      this.appendToControlBuffer(leftover);
-      this.processControlBuffer();
+    const bytesToCopy = Math.min(data.length, remaining);
+    if (bytesToCopy > 0) {
+      this.transferBuffer.set(data.subarray(0, bytesToCopy), this.transferOffset);
+      this.transferOffset += bytesToCopy;
+      this.resetTransferStallTimeout();
     }
 
     // Emit progress
@@ -839,19 +961,51 @@ class BluetoothManagerClass {
       });
     }
 
-    // All bytes received — transfer complete (end marker may follow as JSON)
+    const hasLeftoverControl = data.length > bytesToCopy;
+    if (hasLeftoverControl) {
+      const leftover = data.subarray(bytesToCopy);
+      this.transferActive = false;
+      this.appendToControlBuffer(leftover);
+      this.processControlBuffer();
+    }
+
+    // Control processing may have already completed/cancelled this transfer.
+    if (!this.transferHeaderReceived) return;
+
+    // All bytes received — now wait for explicit end marker.
     if (this.transferOffset >= this.transferTotalLen) {
       this.transferActive = false;
+      this.clearTransferStallTimeout();
+      this.sendBinaryAckIfNeeded();
+      this.startTransferEndTimeout();
     }
   }
 
   private handleTransferEnd(msg: Record<string, unknown>): void {
-    const windowId = String(msg.windowId ?? this.transferWindowId ?? "");
-    if (this.transferTimeoutId) {
-      clearTimeout(this.transferTimeoutId);
-      this.transferTimeoutId = null;
+    const windowId = String(
+      msg.windowId ??
+        this.transferWindowId ??
+        this.transferRequestedWindowId ??
+        "",
+    );
+
+    this.clearTransferHeaderTimeout();
+    this.clearTransferStallTimeout();
+    this.clearTransferEndTimeout();
+
+    if (this.transferTotalLen > 0 && this.transferOffset < this.transferTotalLen) {
+      this.handleTransferFailure(
+        "end_before_complete",
+        `Received end before full payload (${this.transferOffset}/${this.transferTotalLen})`,
+        false,
+      );
+      return;
     }
 
+    this.finishTransferSuccess(windowId);
+  }
+
+  private finishTransferSuccess(windowId: string): void {
     const result: TransferResult = {
       windowId,
       ppgData: this.transferBuffer.slice(0, this.transferPpgLen),
@@ -864,34 +1018,158 @@ class BluetoothManagerClass {
     };
 
     this.log(`Transfer complete: ${windowId} (${this.transferOffset} bytes)`);
-
-    // Reset transfer state
-    this.transferActive = false;
-    this.transferWindowId = null;
-    this.transferBuffer = new Uint8Array(0);
-    this.transferOffset = 0;
-    this.transferTotalLen = 0;
-    this.transferPpgLen = 0;
-    this.transferAccelLen = 0;
-
+    this.endTransferSession();
     this.state.isDownloading = false;
     this.state.downloadProgress = 0;
     this.emit({ type: "downloadComplete", result });
     this.startStatusPolling();
   }
 
-  private cancelTransfer(): void {
-    if (this.transferTimeoutId) {
-      clearTimeout(this.transferTimeoutId);
-      this.transferTimeoutId = null;
+  private sendBinaryAckIfNeeded(): void {
+    if (!this.transferIsV2 || this.transferAckSent || !this.transferWindowId) return;
+    this.transferAckSent = true;
+    this.sendCommand({
+      type: "binary_ack",
+      windowId: this.transferWindowId,
+      bytesReceived: this.transferOffset,
+    });
+    this.log(
+      `Sent binary_ack: windowId=${this.transferWindowId}, bytesReceived=${this.transferOffset}`,
+    );
+  }
+
+  private computeTransferStallTimeoutMs(expectedBytes: number): number {
+    const dynamic =
+      Config.DOWNLOAD_STALL_BASE_MS +
+      Math.ceil(Math.max(0, expectedBytes) / 200) *
+        Config.DOWNLOAD_STALL_PER_200_BYTES_MS;
+    return Math.min(Config.DOWNLOAD_STALL_MAX_MS, dynamic);
+  }
+
+  private startTransferHeaderTimeout(windowId: string): void {
+    this.clearTransferHeaderTimeout();
+    this.transferHeaderTimeoutId = setTimeout(() => {
+      if (!this.state.isDownloading || this.transferHeaderReceived) return;
+      this.handleTransferFailure(
+        "header_timeout",
+        `Timed out waiting for window_data header (${windowId})`,
+        true,
+      );
+    }, Config.DOWNLOAD_HEADER_TIMEOUT_MS);
+  }
+
+  private clearTransferHeaderTimeout(): void {
+    if (!this.transferHeaderTimeoutId) return;
+    clearTimeout(this.transferHeaderTimeoutId);
+    this.transferHeaderTimeoutId = null;
+  }
+
+  private resetTransferStallTimeout(): void {
+    if (!this.state.isDownloading || this.transferTotalLen <= 0) return;
+    this.clearTransferStallTimeout();
+    this.transferStallTimeoutId = setTimeout(() => {
+      if (!this.state.isDownloading || !this.transferHeaderReceived) return;
+      this.handleTransferFailure(
+        "stall_timeout",
+        `Transfer stalled at ${this.transferOffset}/${this.transferTotalLen}`,
+        true,
+      );
+    }, this.transferStallTimeoutMs);
+  }
+
+  private clearTransferStallTimeout(): void {
+    if (!this.transferStallTimeoutId) return;
+    clearTimeout(this.transferStallTimeoutId);
+    this.transferStallTimeoutId = null;
+  }
+
+  private startTransferEndTimeout(): void {
+    if (!this.state.isDownloading) return;
+    this.clearTransferEndTimeout();
+    this.transferEndTimeoutId = setTimeout(() => {
+      if (!this.state.isDownloading || !this.transferHeaderReceived) return;
+      this.handleTransferFailure(
+        "end_timeout",
+        `Timed out waiting for end marker (${this.transferOffset}/${this.transferTotalLen})`,
+        true,
+      );
+    }, Config.DOWNLOAD_END_MARKER_TIMEOUT_MS);
+  }
+
+  private clearTransferEndTimeout(): void {
+    if (!this.transferEndTimeoutId) return;
+    clearTimeout(this.transferEndTimeoutId);
+    this.transferEndTimeoutId = null;
+  }
+
+  private handleTransferFailure(
+    reason: string,
+    message: string,
+    sendCancelTransfer: boolean,
+  ): void {
+    if (!this.state.isDownloading) return;
+    const windowId = this.transferWindowId ?? this.transferRequestedWindowId ?? "";
+    const bytesReceived = this.transferOffset;
+    const totalBytes = this.transferTotalLen;
+    const ratio = totalBytes > 0 ? bytesReceived / totalBytes : 0;
+
+    this.log(`Transfer failed: reason=${reason}, ${message}`);
+
+    if (sendCancelTransfer && this.connectedDevice && this.rxCharacteristic) {
+      this.sendCommand({ type: "cancel_transfer" });
     }
+
+    if (totalBytes > 0 && ratio >= Config.DOWNLOAD_PARTIAL_RATIO_THRESHOLD) {
+      const ppgBytes = Math.min(this.transferPpgLen, bytesReceived);
+      const accelStart = this.transferPpgLen;
+      const accelEnd = Math.min(this.transferPpgLen + this.transferAccelLen, bytesReceived);
+      const result: PartialTransferResult = {
+        windowId,
+        bytesReceived,
+        totalBytes,
+        ppgData: this.transferBuffer.slice(0, ppgBytes),
+        accelData:
+          accelEnd > accelStart
+            ? this.transferBuffer.slice(accelStart, accelEnd)
+            : new Uint8Array(0),
+        reason,
+      };
+      this.endTransferSession();
+      this.state.isDownloading = false;
+      this.state.downloadProgress = 0;
+      this.emit({ type: "downloadPartial", result });
+      this.startStatusPolling();
+      return;
+    }
+
+    this.endTransferSession();
+    this.state.isDownloading = false;
+    this.state.downloadProgress = 0;
+    this.handleError("DOWNLOAD_FAILED", message);
+    this.startStatusPolling();
+  }
+
+  private endTransferSession(): void {
+    this.clearTransferHeaderTimeout();
+    this.clearTransferStallTimeout();
+    this.clearTransferEndTimeout();
     this.transferActive = false;
+    this.transferIsV2 = false;
+    this.transferHeaderReceived = false;
+    this.transferAckSent = false;
+    this.transferRequestedWindowId = null;
     this.transferWindowId = null;
-    this.transferBuffer = new Uint8Array(0);
-    this.transferOffset = 0;
-    this.transferTotalLen = 0;
     this.transferPpgLen = 0;
     this.transferAccelLen = 0;
+    this.transferTotalLen = 0;
+    this.transferChunkSize = 20;
+    this.transferStallTimeoutMs = Config.DOWNLOAD_STALL_BASE_MS;
+    this.transferBuffer = new Uint8Array(0);
+    this.transferOffset = 0;
+  }
+
+  private cancelTransfer(): void {
+    this.endTransferSession();
   }
 
   // ============================================================================
@@ -949,10 +1227,16 @@ class BluetoothManagerClass {
       this.log("Download already in progress");
       return;
     }
+    this.cancelTransfer();
+    this.transferRequestedWindowId = windowId;
+    this.transferHeaderReceived = false;
     this.state.isDownloading = true;
     this.state.downloadProgress = 0;
     this.stopStatusPolling();
+    this.startTransferHeaderTimeout(windowId);
     this.log(`Requesting window data: ${windowId}`);
+    // Best-effort: clear stale firmware state before starting new download.
+    this.sendCommand({ type: "cancel_transfer" });
     this.sendCommand({ type: "get_window_data", windowId });
   }
 

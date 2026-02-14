@@ -67,6 +67,19 @@ export default function DataScreen() {
           idx++;
           // Small delay to let firmware finish storage cleanup before next download
           setTimeout(downloadNext, 200);
+          return;
+        }
+        if (event.type === 'downloadPartial' && event.result.windowId === windowId) {
+          unsub();
+          downloadingRef.current = false;
+          setResults(collected);
+          setIsExtracting(false);
+          const pct = Math.round((event.result.bytesReceived / event.result.totalBytes) * 100);
+          Alert.alert(
+            'Partial Download',
+            `Window ${windowId} stopped at ${pct}%. It was kept on watch for retry.`,
+          );
+          return;
         }
         if (event.type === 'error') {
           unsub();

@@ -13,7 +13,11 @@
 //   {"type":"stop_recording"}                - stop recording, return to idle
 //   {"type":"get_status"}                    - query current state
 //   {"type":"get_queue"}                     - list windowIds ready for upload
-//   {"type":"get_window_data","windowId":"X"} - stream binary data for window X
+//   {"type":"set_mtu","mtu":N,"payload":N}   - set BLE payload chunk size hint
+//   {"type":"cancel_transfer"}               - cancel active/prepared transfer
+//   {"type":"get_window_data","windowId":"X"} - prepare binary data header/state
+//   {"type":"next_chunk","windowId":"X"}     - start transfer chunk pump
+//   {"type":"binary_ack","windowId":"X","bytesReceived":N} - acknowledge payload
 //   {"type":"confirm_upload","windowId":"X"} - delete window X after successful upload
 //   {"type":"delete_all_windows"}            - erase all data files + clear queue
 
@@ -32,9 +36,16 @@ var CONFIG = {
   WINDOW_MS: 60000,
   BASE_PATH: "4s",
   QUEUE_FILE: "4s_queue.json",
-  BLE_CHUNK_SIZE: 20,
-  BLE_CHUNK_DELAY: 25,
-  BLE_WATCHDOG_MS: 60000,
+  BLE_DEFAULT_CHUNK_SIZE: 244,
+  BLE_MIN_CHUNK_SIZE: 20,
+  BLE_MAX_CHUNK_SIZE: 244,
+  BLE_DELAY_MIN_MS: 15,
+  BLE_DELAY_MAX_MS: 100,
+  BLE_DELAY_FAILURE_BACKOFF_MS: 200,
+  BLE_WATCHDOG_MS: 90000,
+  BLE_PROGRESS_KEEPALIVE_MS: 5000,
+  BLE_ACK_PING_MS: 500,
+  BLE_ACK_WAIT_MS: 8000,
 };
 
 // ============================================
@@ -358,7 +369,7 @@ function updateDisplay() {
     y += 12;
   }
 
-  if (bleTransferActive) {
+  if (bleTransferMode !== "idle") {
     g.drawString("uploading...", 10, y);
   }
 }
@@ -366,74 +377,154 @@ function updateDisplay() {
 // ============================================
 // Section 7b: BLE Binary Transfer
 // ============================================
-var bleTransferActive = false;
+var bleTransferMode = "idle"; // idle | prepared | streaming | awaiting_ack
 var bleTransferId = 0;
 var bleChunkState = null;
+var bleChunkSize = CONFIG.BLE_DEFAULT_CHUNK_SIZE;
 var bleWatchdog = null;
 var blePumpTimer = null;
-var pendingResponses = [];
+var bleProgressTimer = null;
+var bleAckPingTimer = null;
+var bleAckWaitTimer = null;
 
-function cancelBleTransfer(reason) {
+function clampChunkSize(payload) {
+  var size = payload | 0;
+  if (size < CONFIG.BLE_MIN_CHUNK_SIZE) size = CONFIG.BLE_MIN_CHUNK_SIZE;
+  if (size > CONFIG.BLE_MAX_CHUNK_SIZE) size = CONFIG.BLE_MAX_CHUNK_SIZE;
+  return size;
+}
+
+function clearBleTransferTimers() {
   if (blePumpTimer) { clearTimeout(blePumpTimer); blePumpTimer = null; }
   if (bleWatchdog) { clearTimeout(bleWatchdog); bleWatchdog = null; }
-  bleTransferActive = false;
+  if (bleProgressTimer) { clearInterval(bleProgressTimer); bleProgressTimer = null; }
+  if (bleAckPingTimer) { clearInterval(bleAckPingTimer); bleAckPingTimer = null; }
+  if (bleAckWaitTimer) { clearTimeout(bleAckWaitTimer); bleAckWaitTimer = null; }
+}
+
+function cancelBleTransfer(reason) {
+  clearBleTransferTimers();
+  bleTransferMode = "idle";
   bleTransferId++;
   bleChunkState = null;
-  // Flush any responses queued during the transfer
-  while (pendingResponses.length > 0) {
-    var r = pendingResponses.shift();
-    Bluetooth.println(JSON.stringify(r));
-  }
 }
 
 function sendEndMarker(windowId) {
-  Bluetooth.println(JSON.stringify({ type: "end", windowId: windowId }));
+  sendBleResponse({ type: "end", windowId: windowId });
+}
+
+function sendTransferProgress(myId) {
+  if (bleTransferId !== myId || bleTransferMode !== "streaming" || !bleChunkState) return;
+  sendBleResponse({
+    type: "transfer_progress",
+    windowId: bleChunkState.windowId,
+    bytesSent: bleChunkState.offset,
+    totalBytes: bleChunkState.length,
+  });
+}
+
+function startTransferProgressKeepalive(myId) {
+  if (bleProgressTimer) { clearInterval(bleProgressTimer); bleProgressTimer = null; }
+  bleProgressTimer = setInterval(function () {
+    sendTransferProgress(myId);
+  }, CONFIG.BLE_PROGRESS_KEEPALIVE_MS);
+}
+
+function startAckWaitTimers(myId) {
+  if (bleAckPingTimer) { clearInterval(bleAckPingTimer); bleAckPingTimer = null; }
+  if (bleAckWaitTimer) { clearTimeout(bleAckWaitTimer); bleAckWaitTimer = null; }
+
+  bleAckPingTimer = setInterval(function () {
+    if (bleTransferId !== myId || bleTransferMode !== "awaiting_ack" || !bleChunkState) return;
+    sendBleResponse({ type: "ping", windowId: bleChunkState.windowId });
+  }, CONFIG.BLE_ACK_PING_MS);
+
+  bleAckWaitTimer = setTimeout(function () {
+    if (bleTransferId !== myId || bleTransferMode !== "awaiting_ack" || !bleChunkState) return;
+    sendEndMarker(bleChunkState.windowId);
+    cancelBleTransfer("ack_timeout");
+  }, CONFIG.BLE_ACK_WAIT_MS);
+}
+
+function scheduleNextChunk(delayMs, myId) {
+  if (blePumpTimer) { clearTimeout(blePumpTimer); blePumpTimer = null; }
+  blePumpTimer = setTimeout(function () {
+    blePumpTimer = null;
+    if (bleTransferId === myId) sendNextChunk();
+  }, delayMs);
+}
+
+function nextChunkView(st) {
+  if (st.offset >= st.length) return null;
+  var remaining = st.length - st.offset;
+  var maxLen = Math.min(st.chunkSize, remaining);
+  if (st.offset < st.ppgLen) {
+    if (!st.ppgBuf) return null;
+    var ppgRemaining = st.ppgLen - st.offset;
+    var ppgLen = Math.min(maxLen, ppgRemaining);
+    return new Uint8Array(st.ppgBuf, st.offset, ppgLen);
+  }
+  var accelOffset = st.offset - st.ppgLen;
+  if (!st.accelBuf) return null;
+  var accelRemaining = st.accelLen - accelOffset;
+  var accelLen = Math.min(maxLen, accelRemaining);
+  return new Uint8Array(st.accelBuf, accelOffset, accelLen);
 }
 
 function sendNextChunk() {
-  if (!bleTransferActive || !bleChunkState) return;
+  if (bleTransferMode !== "streaming" || !bleChunkState) return;
   var st = bleChunkState;
   var myId = bleTransferId;
 
   if (st.offset >= st.length) {
-    // All data sent
-    var wid = st.windowId;
-    setTimeout(function () {
-      if (bleTransferId !== myId) return;
-      sendEndMarker(wid);
-      cancelBleTransfer("complete");
-    }, 50);
+    bleTransferMode = "awaiting_ack";
+    if (bleProgressTimer) { clearInterval(bleProgressTimer); bleProgressTimer = null; }
+    startAckWaitTimers(myId);
     return;
   }
 
-  var end = Math.min(st.offset + CONFIG.BLE_CHUNK_SIZE, st.length);
-  var chunk = new Uint8Array(st.bytes.buffer, st.offset, end - st.offset);
+  var chunk = nextChunkView(st);
+  if (!chunk || chunk.length <= 0) {
+    bleTransferMode = "awaiting_ack";
+    if (bleProgressTimer) { clearInterval(bleProgressTimer); bleProgressTimer = null; }
+    startAckWaitTimers(myId);
+    return;
+  }
 
   try {
     var written = Bluetooth.write(chunk);
     if (written !== false && written !== 0) {
       st.offset += chunk.length;
-      // Schedule next chunk
-      blePumpTimer = setTimeout(function () {
-        blePumpTimer = null;
-        if (bleTransferId === myId) sendNextChunk();
-      }, CONFIG.BLE_CHUNK_DELAY);
+      st.consecutiveFailures = 0;
+      st.delayMs = Math.max(CONFIG.BLE_DELAY_MIN_MS, st.delayMs - 5);
+      if (st.offset >= st.length) {
+        bleTransferMode = "awaiting_ack";
+        if (bleProgressTimer) { clearInterval(bleProgressTimer); bleProgressTimer = null; }
+        startAckWaitTimers(myId);
+      } else {
+        scheduleNextChunk(st.delayMs, myId);
+      }
     } else {
-      // Buffer full — retry after longer delay
-      blePumpTimer = setTimeout(function () {
-        blePumpTimer = null;
-        if (bleTransferId === myId) sendNextChunk();
-      }, 100);
+      st.consecutiveFailures++;
+      st.delayMs = Math.min(CONFIG.BLE_DELAY_MAX_MS, st.delayMs + 10);
+      var retryDelay =
+        st.consecutiveFailures >= 10
+          ? CONFIG.BLE_DELAY_FAILURE_BACKOFF_MS
+          : st.delayMs;
+      scheduleNextChunk(retryDelay, myId);
     }
   } catch (e) {
-    cancelBleTransfer("tx_error");
-    Bluetooth.println(JSON.stringify({
-      type: "error", cmd: "send_data", windowId: st.windowId, message: "tx_failed"
-    }));
+    st.consecutiveFailures++;
+    st.delayMs = Math.min(CONFIG.BLE_DELAY_MAX_MS, st.delayMs + 10);
+    var retryDelay2 =
+      st.consecutiveFailures >= 10
+        ? CONFIG.BLE_DELAY_FAILURE_BACKOFF_MS
+        : st.delayMs;
+    scheduleNextChunk(retryDelay2, myId);
   }
 }
 
-function sendWindowData(windowId) {
+function prepareWindowData(windowId) {
   cancelBleTransfer("new_transfer");
 
   var base = CONFIG.BASE_PATH + "_" + windowId;
@@ -445,59 +536,94 @@ function sendWindowData(windowId) {
   var totalLength = ppgLen + accelLen;
 
   // Send JSON header
-  Bluetooth.println(JSON.stringify({
+  sendBleResponse({
     type: "window_data",
+    protocolVersion: 2,
     windowId: windowId,
     ppgLen: ppgLen,
     accelLen: accelLen,
     totalLength: totalLength,
-  }));
+    chunkSize: bleChunkSize,
+  });
 
-  if (totalLength === 0) {
-    setTimeout(function () {
-      sendEndMarker(windowId);
-    }, 100);
-    return;
-  }
-
-  // Concatenate ppg + accel into one contiguous buffer for simple chunk pump
-  var combined = new Uint8Array(totalLength);
-  if (ppgBuf) combined.set(new Uint8Array(ppgBuf), 0);
-  if (accelBuf) combined.set(new Uint8Array(accelBuf), ppgLen);
-
-  bleTransferActive = true;
+  bleTransferMode = "prepared";
   bleTransferId++;
   bleChunkState = {
     windowId: windowId,
-    bytes: combined,
+    ppgBuf: ppgBuf,
+    accelBuf: accelBuf,
+    ppgLen: ppgLen,
+    accelLen: accelLen,
+    chunkSize: bleChunkSize,
+    delayMs: CONFIG.BLE_DELAY_MIN_MS,
+    consecutiveFailures: 0,
     offset: 0,
     length: totalLength,
   };
 
   // Watchdog: auto-cancel stalled transfers
   var myId = bleTransferId;
-  var wid = windowId;
   bleWatchdog = setTimeout(function () {
-    if (bleTransferActive && bleTransferId === myId) {
+    if (bleTransferId === myId && bleTransferMode !== "idle" && bleChunkState) {
+      var wid = bleChunkState.windowId;
       cancelBleTransfer("watchdog");
-      Bluetooth.println(JSON.stringify({
+      sendBleResponse({
         type: "error", cmd: "get_window_data", windowId: wid, message: "transfer_timeout"
-      }));
+      });
     }
   }, CONFIG.BLE_WATCHDOG_MS);
+}
 
-  // Start pumping
+function startPreparedTransfer(windowId) {
+  if (!bleChunkState || bleTransferMode !== "prepared") {
+    sendBleResponse({ type: "error", cmd: "next_chunk", message: "not_prepared" });
+    return;
+  }
+  if (windowId !== bleChunkState.windowId) {
+    sendBleResponse({ type: "error", cmd: "next_chunk", message: "window_mismatch" });
+    return;
+  }
+  sendBleResponse({ type: "ack", cmd: "next_chunk", windowId: windowId });
+
+  if (bleChunkState.length === 0) {
+    sendEndMarker(windowId);
+    cancelBleTransfer("empty_transfer");
+    return;
+  }
+
+  bleTransferMode = "streaming";
+  startTransferProgressKeepalive(bleTransferId);
   sendNextChunk();
+}
+
+function handleBinaryAck(windowId, bytesReceived) {
+  if (!bleChunkState || bleTransferMode !== "awaiting_ack") {
+    sendBleResponse({ type: "error", cmd: "binary_ack", message: "not_waiting_for_ack" });
+    return;
+  }
+  if (windowId !== bleChunkState.windowId) {
+    sendBleResponse({ type: "error", cmd: "binary_ack", message: "window_mismatch" });
+    return;
+  }
+  sendBleResponse({
+    type: "ack",
+    cmd: "binary_ack",
+    windowId: windowId,
+    bytesReceived: bytesReceived,
+  });
+  sendEndMarker(windowId);
+  cancelBleTransfer("binary_ack");
+}
+
+function setTransferMtu(payload) {
+  bleChunkSize = clampChunkSize(payload);
+  return bleChunkSize;
 }
 
 // ============================================
 // Section 8: BLE Command Handler
 // ============================================
 function sendBleResponse(obj) {
-  if (bleTransferActive) {
-    pendingResponses.push(obj);
-    return;
-  }
   Bluetooth.println(JSON.stringify(obj));
 }
 
@@ -619,12 +745,50 @@ function handleCommand(input) {
       });
       break;
 
+    case "set_mtu":
+      var payload =
+        typeof cmd.payload === "number"
+          ? cmd.payload
+          : (typeof cmd.mtu === "number" ? cmd.mtu - 3 : CONFIG.BLE_DEFAULT_CHUNK_SIZE);
+      var chunkSize = setTransferMtu(payload);
+      sendBleResponse({
+        type: "ack",
+        cmd: "set_mtu",
+        payload: chunkSize,
+        chunkSize: chunkSize,
+      });
+      break;
+
+    case "cancel_transfer":
+      cancelBleTransfer("cancel_transfer_cmd");
+      sendBleResponse({ type: "ack", cmd: "cancel_transfer" });
+      break;
+
     case "get_window_data":
       if (!cmd.windowId) {
         sendBleResponse({ type: "error", cmd: "get_window_data", message: "missing_windowId" });
         break;
       }
-      sendWindowData(String(cmd.windowId));
+      prepareWindowData(String(cmd.windowId));
+      break;
+
+    case "next_chunk":
+      if (!cmd.windowId) {
+        sendBleResponse({ type: "error", cmd: "next_chunk", message: "missing_windowId" });
+        break;
+      }
+      startPreparedTransfer(String(cmd.windowId));
+      break;
+
+    case "binary_ack":
+      if (!cmd.windowId) {
+        sendBleResponse({ type: "error", cmd: "binary_ack", message: "missing_windowId" });
+        break;
+      }
+      handleBinaryAck(
+        String(cmd.windowId),
+        typeof cmd.bytesReceived === "number" ? cmd.bytesReceived : -1
+      );
       break;
 
     case "confirm_upload":
