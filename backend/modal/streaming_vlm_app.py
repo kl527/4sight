@@ -24,7 +24,7 @@ FLASH_ATTN_WHEEL = (
 
 image = (
     modal.Image.from_registry("python:3.11-slim-bookworm")
-    .apt_install("ffmpeg", "git")
+    .apt_install("ffmpeg", "git", "build-essential")
     .pip_install(
         "accelerate==1.8.1",
         "decord==0.6.0",
