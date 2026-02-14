@@ -21,7 +21,7 @@ image = (
     .pip_install(
         "accelerate==1.8.1",
         "decord==0.6.0",
-        "numpy==1.24.4",
+        "numpy==2.2.6",
         "opencv-python-headless==4.12.0.88",
         "qwen-vl-utils==0.0.11",
         "safetensors==0.5.3",
@@ -59,7 +59,7 @@ def _int_or_none(name: str, default: int | None) -> int | None:
     image=image,
     gpu=GPU_TYPE,
     timeout=1200,
-    container_idle_timeout=300,
+    scaledown_window=300,
     volumes={"/root/.cache/huggingface": HF_CACHE},
 )
 class StreamingVLMSession:
