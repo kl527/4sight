@@ -49,3 +49,15 @@ The Worker forwards them to backend headers:
 - `x-modal-token-secret`
 - `x-modal-app-name`
 - `x-modal-class-name`
+
+## CD behavior
+
+`.github/workflows/deploy-backend.yml` now deploys Modal first, then deploys Worker:
+
+1. Deploys `modal/streaming_vlm_app.py` to Modal.
+2. Writes Worker secrets (including Modal token/app/class).
+3. Deploys Worker to Cloudflare.
+
+Optional repo variable for Modal environment selection:
+
+- `FORESIGHT_MODAL_ENVIRONMENT` (defaults to `main`)

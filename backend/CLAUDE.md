@@ -35,3 +35,13 @@ Worker secrets for vision inference:
 - `FORESIGHT_MODAL_TOKEN_SECRET`
 - `FORESIGHT_MODAL_APP_NAME` (optional override)
 - `FORESIGHT_MODAL_CLASS_NAME` (optional override)
+
+CD deploy order (`.github/workflows/deploy-backend.yml`):
+
+1. Deploy Modal app (`backend/modal/streaming_vlm_app.py`) to Modal.
+2. Sync Worker secrets (including Modal credentials + app/class).
+3. Deploy Worker.
+
+Optional CI variable:
+
+- `FORESIGHT_MODAL_ENVIRONMENT` (Modal environment name; defaults to `main`).

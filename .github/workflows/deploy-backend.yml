@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: astral-sh/setup-uv@v5
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -29,14 +31,30 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Deploy StreamingVLM app to Modal
+        working-directory: backend
+        run: |
+          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-streamingvlm}"
+          MODAL_ENVIRONMENT="${FORESIGHT_MODAL_ENVIRONMENT:-main}"
+          echo "Deploying Modal app '${MODAL_APP_NAME}' to environment '${MODAL_ENVIRONMENT}'"
+          STREAMING_VLM_MODAL_APP_NAME="$MODAL_APP_NAME" \
+            uv run --with modal modal deploy -e "$MODAL_ENVIRONMENT" modal/streaming_vlm_app.py
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.FORESIGHT_MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.FORESIGHT_MODAL_TOKEN_SECRET }}
+          FORESIGHT_MODAL_APP_NAME: ${{ vars.FORESIGHT_MODAL_APP_NAME }}
+          FORESIGHT_MODAL_ENVIRONMENT: ${{ vars.FORESIGHT_MODAL_ENVIRONMENT }}
+
       - name: Set worker secrets
         run: |
+          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-streamingvlm}"
+          MODAL_CLASS_NAME="${FORESIGHT_MODAL_CLASS_NAME:-StreamingVLMSession}"
           echo "$MAGIC_WORD" | pnpm exec wrangler secret put MAGIC_WORD --name foresight-backend
           echo "$FORESIGHT_POKE_API_KEY" | pnpm exec wrangler secret put FORESIGHT_POKE_API_KEY --name foresight-backend
           echo "$FORESIGHT_MODAL_TOKEN_ID" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_ID --name foresight-backend
           echo "$FORESIGHT_MODAL_TOKEN_SECRET" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_SECRET --name foresight-backend
-          echo "$FORESIGHT_MODAL_APP_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_APP_NAME --name foresight-backend
-          echo "$FORESIGHT_MODAL_CLASS_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_CLASS_NAME --name foresight-backend
+          echo "$MODAL_APP_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_APP_NAME --name foresight-backend
+          echo "$MODAL_CLASS_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_CLASS_NAME --name foresight-backend
         env:
           MAGIC_WORD: ${{ vars.MAGIC_WORD }}
           FORESIGHT_POKE_API_KEY: ${{ secrets.FORESIGHT_POKE_API_KEY }}
