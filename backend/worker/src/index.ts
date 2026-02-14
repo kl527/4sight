@@ -24,6 +24,10 @@ export default {
       BACKEND: DurableObjectNamespace<BackendContainer>;
       MAGIC_WORD: string;
       FORESIGHT_POKE_API_KEY: string;
+      FORESIGHT_MODAL_TOKEN_ID: string;
+      FORESIGHT_MODAL_TOKEN_SECRET: string;
+      FORESIGHT_MODAL_APP_NAME: string;
+      FORESIGHT_MODAL_CLASS_NAME: string;
     },
   ): Promise<Response> {
     const url = new URL(request.url);
@@ -45,6 +49,18 @@ export default {
     const headers = new Headers(request.headers);
     if (env.FORESIGHT_POKE_API_KEY) {
       headers.set("x-poke-api-key", env.FORESIGHT_POKE_API_KEY);
+    }
+    if (env.FORESIGHT_MODAL_TOKEN_ID) {
+      headers.set("x-modal-token-id", env.FORESIGHT_MODAL_TOKEN_ID);
+    }
+    if (env.FORESIGHT_MODAL_TOKEN_SECRET) {
+      headers.set("x-modal-token-secret", env.FORESIGHT_MODAL_TOKEN_SECRET);
+    }
+    if (env.FORESIGHT_MODAL_APP_NAME) {
+      headers.set("x-modal-app-name", env.FORESIGHT_MODAL_APP_NAME);
+    }
+    if (env.FORESIGHT_MODAL_CLASS_NAME) {
+      headers.set("x-modal-class-name", env.FORESIGHT_MODAL_CLASS_NAME);
     }
     const proxied = new Request(request, { headers });
 

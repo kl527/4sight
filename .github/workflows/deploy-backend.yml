@@ -33,9 +33,17 @@ jobs:
         run: |
           echo "$MAGIC_WORD" | pnpm exec wrangler secret put MAGIC_WORD --name foresight-backend
           echo "$FORESIGHT_POKE_API_KEY" | pnpm exec wrangler secret put FORESIGHT_POKE_API_KEY --name foresight-backend
+          echo "$FORESIGHT_MODAL_TOKEN_ID" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_ID --name foresight-backend
+          echo "$FORESIGHT_MODAL_TOKEN_SECRET" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_SECRET --name foresight-backend
+          echo "$FORESIGHT_MODAL_APP_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_APP_NAME --name foresight-backend
+          echo "$FORESIGHT_MODAL_CLASS_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_CLASS_NAME --name foresight-backend
         env:
           MAGIC_WORD: ${{ vars.MAGIC_WORD }}
           FORESIGHT_POKE_API_KEY: ${{ secrets.FORESIGHT_POKE_API_KEY }}
+          FORESIGHT_MODAL_TOKEN_ID: ${{ secrets.FORESIGHT_MODAL_TOKEN_ID }}
+          FORESIGHT_MODAL_TOKEN_SECRET: ${{ secrets.FORESIGHT_MODAL_TOKEN_SECRET }}
+          FORESIGHT_MODAL_APP_NAME: ${{ vars.FORESIGHT_MODAL_APP_NAME }}
+          FORESIGHT_MODAL_CLASS_NAME: ${{ vars.FORESIGHT_MODAL_CLASS_NAME }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
