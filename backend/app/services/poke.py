@@ -7,24 +7,19 @@ Body: {"message": "your message text"}
 
 import httpx
 
-from app.config import settings
-
 
 class PokeClient:
     ENDPOINT = "https://poke.com/api/v1/inbound-sms/webhook"
 
-    def __init__(self):
-        self._headers = {
-            "Authorization": f"Bearer {settings.poke_api_key}",
-            "Content-Type": "application/json",
-        }
-
-    async def send(self, message: str) -> dict:
+    async def send(self, message: str, api_key: str) -> dict:
         """Send a message through Poke (delivered via iMessage/SMS)."""
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 self.ENDPOINT,
-                headers=self._headers,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
                 json={"message": message},
             )
             resp.raise_for_status()

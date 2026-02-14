@@ -23,6 +23,7 @@ export default {
     env: {
       BACKEND: DurableObjectNamespace<BackendContainer>;
       MAGIC_WORD: string;
+      FORESIGHT_POKE_API_KEY: string;
     },
   ): Promise<Response> {
     const url = new URL(request.url);
@@ -40,7 +41,14 @@ export default {
       return new Response("forbidden", { status: 403 });
     }
 
+    // forward secrets to the container as headers
+    const headers = new Headers(request.headers);
+    if (env.FORESIGHT_POKE_API_KEY) {
+      headers.set("x-poke-api-key", env.FORESIGHT_POKE_API_KEY);
+    }
+    const proxied = new Request(request, { headers });
+
     const container = getContainer(env.BACKEND, "backend");
-    return container.fetch(request);
+    return container.fetch(proxied);
   },
 };
