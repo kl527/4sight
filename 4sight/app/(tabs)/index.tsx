@@ -1,30 +1,65 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, ImageSourcePropType, Animated, TouchableOpacity } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Fonts } from '@/constants/theme';
+import { useBluetooth } from '@/hooks/use-bluetooth';
+import { CircularScoreRing } from '@/components/ui/circular-score-ring';
 
-const INTERVENTIONS = [
+const INTERVENTIONS: {
+  title: string;
+  time: string;
+  color: string;
+  icon: ImageSourcePropType;
+  intervened: boolean;
+}[] = [
   {
     title: 'Working Out',
     time: '3:13 PM',
     color: '#C8DEBE',
+    icon: require('@/assets/workout.png'),
     intervened: false,
   },
   {
     title: 'Unhealthy Eating',
     time: '3:13 PM',
     color: '#DEBEBE',
+    icon: require('@/assets/food.png'),
     intervened: true,
   },
   {
     title: 'Brain Rot',
     time: '2:50 PM',
     color: '#DEBEBE',
+    icon: require('@/assets/brainrot.png'),
     intervened: true,
   },
 ];
 
 export default function HomeScreen() {
+  const router = useRouter();
+  const { isAutoSyncing, isDownloading, downloadProgress, connectionState, requestQueue, setAutoSync, deviceStatus } = useBluetooth();
+  const isSyncing = isAutoSyncing || isDownloading;
+  const progress = downloadProgress ?? 0;
+
+  const opacity = React.useRef(new Animated.Value(0)).current;
+
+  // Auto-start syncing data from the watch on mount
+  React.useEffect(() => {
+    if (connectionState === 'connected') {
+      setAutoSync(true);
+      requestQueue();
+    }
+  }, [connectionState]);
+
+  React.useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: isSyncing ? 1 : 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [isSyncing]);
+
   return (
     <ScrollView
       style={styles.container}
@@ -33,14 +68,17 @@ export default function HomeScreen() {
     >
       {/* Score Section */}
       <View style={styles.scoreSection}>
-        {/* Progress pill + sync icon row */}
+        {/* Top row */}
         <View style={styles.topRow}>
-          <View style={styles.progressPill}>
+          <Animated.View style={[styles.progressPill, { opacity }]} pointerEvents={isSyncing ? 'auto' : 'none'}>
+            <Ionicons name="watch-outline" size={14} color="#2B2B2B" style={{ marginRight: 8 }} />
             <View style={styles.progressTrack}>
-              <View style={styles.progressFill} />
+              <View style={[styles.progressFill, { width: `${progress}%` }]} />
             </View>
-          </View>
-          <Ionicons name="sync-outline" size={24} color="#2B2B2B" />
+          </Animated.View>
+          <TouchableOpacity onPress={() => router.push('/device')} activeOpacity={0.7}>
+            <CircularScoreRing percentage={deviceStatus?.battery ?? 0} />
+          </TouchableOpacity>
         </View>
 
         {/* Spacer for decorative area */}
@@ -91,8 +129,10 @@ export default function HomeScreen() {
         {INTERVENTIONS.map((item, index) => (
           <View key={index} style={styles.card}>
             <View
-              style={[styles.iconSquare, { backgroundColor: item.color }]}
-            />
+              style={[styles.iconCircle, { backgroundColor: item.color }]}
+            >
+              <Image source={item.icon} style={styles.iconImage} />
+            </View>
             <View style={styles.cardContent}>
               <Text style={styles.cardTitle}>{item.title}</Text>
               <Text style={styles.cardTime}>{item.time}</Text>
@@ -129,29 +169,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   progressPill: {
-    width: 84,
-    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 30,
     backgroundColor: '#F2F1ED',
-    borderRadius: 20,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 4,
+    borderRadius: 15,
+    paddingHorizontal: 10,
+    borderWidth: 0.5,
+    borderColor: '#D7D7D7',
   },
   progressTrack: {
-    width: 40,
-    height: 6,
-    backgroundColor: '#F7F6F5',
-    borderRadius: 20,
+    width: 44,
+    height: 5,
+    backgroundColor: '#DDD9D0',
+    borderRadius: 3,
+    overflow: 'hidden',
   },
   progressFill: {
-    width: 26,
-    height: 6,
+    height: 5,
     backgroundColor: '#8AA97C',
-    borderRadius: 20,
+    borderRadius: 3,
   },
   dayScoreLabel: {
     fontSize: 16,
@@ -233,13 +270,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 13,
   },
-  iconSquare: {
+  iconCircle: {
     width: 32,
     height: 32,
-    borderRadius: 8,
+    borderRadius: 16,
     borderWidth: 0.2,
     borderColor: '#C4C4C4',
     marginRight: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconImage: {
+    width: 16,
+    height: 16,
+    tintColor: '#2B2B2B',
   },
   cardContent: {
     flex: 1,
