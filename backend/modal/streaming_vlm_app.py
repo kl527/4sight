@@ -16,7 +16,10 @@ GPU_TYPE = os.getenv("STREAMING_VLM_GPU", "A100")
 HF_CACHE = modal.Volume.from_name("streaming-vlm-hf-cache", create_if_missing=True)
 
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.6.3-devel-ubuntu22.04",
+        add_python="3.11",
+    )
     .apt_install("ffmpeg", "git")
     .pip_install("packaging", "torch==2.7.1")
     .pip_install("flash-attn==2.8.0.post2", gpu="A100")
