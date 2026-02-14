@@ -1,12 +1,14 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-import { ModulesModuleEvents } from './Modules.types';
+import { ExpoMetaGlassesModuleEvents } from './Modules.types';
 
-declare class ModulesModule extends NativeModule<ModulesModuleEvents> {
-  PI: number;
-  hello(): string;
-  setValueAsync(value: string): Promise<void>;
+declare class ExpoMetaGlassesModule extends NativeModule<ExpoMetaGlassesModuleEvents> {
+  configure(): Promise<void>;
+  startRegistration(): Promise<void>;
+  stopRegistration(): Promise<void>;
+  handleUrl(url: string): Promise<void>;
+  startStreaming(deviceId: string, wsUrl: string): Promise<void>;
+  stopStreaming(): Promise<void>;
 }
 
-// This call loads the native module object from the JSI.
-export default requireNativeModule<ModulesModule>('Modules');
+export default requireNativeModule<ExpoMetaGlassesModule>('ExpoMetaGlasses');

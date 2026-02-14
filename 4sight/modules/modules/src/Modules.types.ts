@@ -1,19 +1,16 @@
-import type { StyleProp, ViewStyle } from 'react-native';
+export type RegistrationState = 'registered' | 'unregistered' | 'registering' | 'unregistering';
+export type StreamingStatus = 'streaming' | 'stopped' | 'starting' | 'error';
 
-export type OnLoadEventPayload = {
-  url: string;
+export type GlassesDevice = {
+  id: string;
+  name: string;
+  modelName: string;
 };
 
-export type ModulesModuleEvents = {
-  onChange: (params: ChangeEventPayload) => void;
-};
-
-export type ChangeEventPayload = {
-  value: string;
-};
-
-export type ModulesViewProps = {
-  url: string;
-  onLoad: (event: { nativeEvent: OnLoadEventPayload }) => void;
-  style?: StyleProp<ViewStyle>;
+export type ExpoMetaGlassesModuleEvents = {
+  onRegistrationStateChanged: (params: { state: RegistrationState }) => void;
+  onDevicesChanged: (params: { devices: GlassesDevice[] }) => void;
+  onStreamingStatusChanged: (params: { status: StreamingStatus }) => void;
+  onCaptionReceived: (params: { caption: string; latencyMs: number }) => void;
+  onPreviewFrame: (params: { base64: string }) => void;
 };

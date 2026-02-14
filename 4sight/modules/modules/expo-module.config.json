@@ -1,9 +1,9 @@
 {
   "platforms": ["apple", "android", "web"],
   "apple": {
-    "modules": ["ModulesModule"]
+    "modules": ["ExpoMetaGlassesModule"]
   },
   "android": {
-    "modules": ["expo.modules.modules.ModulesModule"]
+    "modules": ["expo.modules.modules.ExpoMetaGlassesModule"]
   }
 }
