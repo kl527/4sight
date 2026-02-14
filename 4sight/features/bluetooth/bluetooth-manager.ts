@@ -16,6 +16,7 @@ import {
   State,
   BleError,
 } from "react-native-ble-plx";
+import { AppState, type AppStateStatus } from "react-native";
 
 import { extract } from "@/features/feature-extraction/feature-extractor";
 import * as LocalStore from "@/features/storage/local-store";
@@ -232,6 +233,11 @@ class BluetoothManagerClass {
   private autoSyncInProgress = false;
   private autoSyncQueue: string[] = [];
 
+  // AppState (iOS background handling)
+  private appStateSubscription: { remove: () => void } | null = null;
+  private appIsActive = true;
+  private transferPausedInBackground = false;
+
   // Event listeners
   private listeners = new Set<BluetoothEventListener>();
 
@@ -252,6 +258,11 @@ class BluetoothManagerClass {
       } catch (err) {
         console.warn("[BLE] Failed to initialize local store:", err);
       }
+      // Listen for iOS background/foreground transitions
+      this.appStateSubscription = AppState.addEventListener(
+        "change",
+        (nextState: AppStateStatus) => this.handleAppStateChange(nextState),
+      );
       this.log("Initialized");
     } catch (e) {
       console.warn("[BLE] Failed to initialize BleManager:", e);
@@ -265,6 +276,8 @@ class BluetoothManagerClass {
     this.cancelTransfer();
     this.notificationSubscription?.remove();
     this.disconnectSubscription?.remove();
+    this.appStateSubscription?.remove();
+    this.appStateSubscription = null;
     this.manager?.destroy();
     this.manager = null;
     this.connectedDevice = null;
@@ -1390,6 +1403,87 @@ class BluetoothManagerClass {
   setAutoSync(enabled: boolean): void {
     this.autoSyncEnabled = enabled;
     this.log(`autoSync ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  // ============================================================================
+  // APP STATE (iOS BACKGROUND)
+  // ============================================================================
+
+  private handleAppStateChange(nextState: AppStateStatus): void {
+    const wasActive = this.appIsActive;
+    this.appIsActive = nextState === "active";
+
+    if (wasActive && !this.appIsActive) {
+      this.handleEnteredBackground();
+    } else if (!wasActive && this.appIsActive) {
+      this.handleEnteredForeground();
+    }
+  }
+
+  private handleEnteredBackground(): void {
+    this.log("App entered background");
+
+    // Stop status polling — setInterval timers are unreliable in background
+    this.stopStatusPolling();
+
+    // Pause transfer timeouts so they don't fire stale on resume.
+    // BLE notifications still flow in background (UIBackgroundModes: bluetooth-central),
+    // so handleTransferData() continues to accumulate bytes.
+    if (this.state.isDownloading) {
+      this.clearTransferStallTimeout();
+      this.clearTransferEndTimeout();
+      this.clearTransferHeaderTimeout();
+      this.transferPausedInBackground = true;
+      this.log("Paused transfer timeouts for background");
+    }
+  }
+
+  private handleEnteredForeground(): void {
+    this.log("App entered foreground");
+
+    if (this.state.connectionState !== "connected") return;
+
+    // Resume status polling
+    this.startStatusPolling();
+    this.requestStatus();
+    this.requestQueue();
+
+    // Resume transfer timeouts
+    if (this.transferPausedInBackground && this.state.isDownloading) {
+      this.transferPausedInBackground = false;
+
+      if (this.transferHeaderReceived && this.transferOffset >= this.transferTotalLen) {
+        // Transfer completed while backgrounded — kick the end sequence
+        this.log("Transfer completed in background, finishing");
+        this.sendBinaryAckIfNeeded();
+        this.startTransferEndTimeout();
+      } else if (this.transferHeaderReceived) {
+        // Transfer still in progress — restart stall timeout
+        this.log(
+          `Resuming transfer: ${this.transferOffset}/${this.transferTotalLen} bytes`,
+        );
+        this.resetTransferStallTimeout();
+      } else {
+        // Still waiting for header
+        this.startTransferHeaderTimeout(this.transferRequestedWindowId ?? "");
+      }
+    } else {
+      this.transferPausedInBackground = false;
+
+      // If not downloading and auto-sync is enabled, check for queued windows
+      if (!this.state.isDownloading && this.autoSyncEnabled) {
+        setTimeout(() => {
+          if (
+            !this.autoSyncInProgress &&
+            !this.state.isDownloading &&
+            this.state.uploadQueue.length > 0
+          ) {
+            this.log("Foreground resume: triggering auto-sync check");
+            this.startAutoSync();
+          }
+        }, 1_000);
+      }
+    }
   }
 
   // ============================================================================

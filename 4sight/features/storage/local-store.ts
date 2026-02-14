@@ -102,6 +102,16 @@ export function getWindowFeatures(
   }
 }
 
+export function getWindowPPGBinary(windowId: string): Uint8Array | null {
+  try {
+    const ppgFile = new File(WINDOWS_DIR, windowId, 'ppg.bin');
+    if (!ppgFile.exists) return null;
+    return ppgFile.bytesSync();
+  } catch {
+    return null;
+  }
+}
+
 export function markUploadConfirmed(windowId: string): void {
   const manifest = readManifest();
   const record = manifest.find((r) => r.windowId === windowId);

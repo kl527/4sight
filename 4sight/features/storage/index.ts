@@ -4,6 +4,7 @@ export {
   hasWindow,
   getManifest,
   getWindowFeatures,
+  getWindowPPGBinary,
   markUploadConfirmed,
 } from './local-store';
 
