@@ -39,7 +39,6 @@
     },
     "plugins": [
       "./plugins/withUseFrameworks",
-      "./modules/modules",
       "expo-router",
       [
         "expo-splash-screen",

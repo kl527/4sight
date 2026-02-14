@@ -15,12 +15,5 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
   }
 
-  # Meta Wearables DAT SDK via SPM
-  spm_dependency(s,
-    url: 'https://github.com/facebook/meta-wearables-dat-ios',
-    requirement: { kind: 'upToNextMinorVersion', minimumVersion: '0.3.0' },
-    products: ['MWDATCore', 'MWDATCamera']
-  )
-
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
 end
