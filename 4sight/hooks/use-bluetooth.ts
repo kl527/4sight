@@ -36,7 +36,6 @@ export function useBluetooth() {
   const deleteAllWindows = useCallback(() => BluetoothManager.deleteAllWindows(), []);
   const requestStatus = useCallback(() => BluetoothManager.requestStatus(), []);
   const requestQueue = useCallback(() => BluetoothManager.requestQueue(), []);
-
   return {
     ...state,
     startScanning,

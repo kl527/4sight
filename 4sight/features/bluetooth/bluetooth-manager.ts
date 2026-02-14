@@ -9,15 +9,21 @@
  * See firmware/4sight.js for the full command reference.
  */
 
-import { BleManager, Device, Characteristic, State, BleError } from 'react-native-ble-plx';
+import {
+  BleManager,
+  Device,
+  Characteristic,
+  State,
+  BleError,
+} from "react-native-ble-plx";
 
 // ============================================================================
 // BLE CONSTANTS
 // ============================================================================
 
-const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // Phone writes to this
-const NUS_TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // Phone reads from this
+const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // Phone writes to this
+const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // Phone reads from this
 
 const Config = {
   CONNECTION_TIMEOUT_MS: 15_000,
@@ -31,8 +37,19 @@ const Config = {
 // TYPES
 // ============================================================================
 
-export type BluetoothState = 'unknown' | 'poweredOn' | 'poweredOff' | 'resetting' | 'unauthorized' | 'unsupported';
-export type ConnectionState = 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'error';
+export type BluetoothState =
+  | "unknown"
+  | "poweredOn"
+  | "poweredOff"
+  | "resetting"
+  | "unauthorized"
+  | "unsupported";
+export type ConnectionState =
+  | "disconnected"
+  | "scanning"
+  | "connecting"
+  | "connected"
+  | "error";
 
 export interface BleDevice {
   id: string;
@@ -73,26 +90,39 @@ export interface BluetoothManagerState {
 }
 
 export type BluetoothManagerEvent =
-  | { type: 'bluetoothStateChanged'; state: BluetoothState }
-  | { type: 'connectionStateChanged'; state: ConnectionState; deviceName?: string }
-  | { type: 'deviceDiscovered'; device: BleDevice }
-  | { type: 'statusUpdated'; status: DeviceStatus }
-  | { type: 'queueUpdated'; windows: string[] }
-  | { type: 'downloadProgress'; windowId: string; bytesReceived: number; totalBytes: number; percentage: number }
-  | { type: 'downloadComplete'; result: TransferResult }
-  | { type: 'error'; error: { code: string; message: string; timestamp: number } };
+  | { type: "bluetoothStateChanged"; state: BluetoothState }
+  | {
+      type: "connectionStateChanged";
+      state: ConnectionState;
+      deviceName?: string;
+    }
+  | { type: "deviceDiscovered"; device: BleDevice }
+  | { type: "statusUpdated"; status: DeviceStatus }
+  | { type: "queueUpdated"; windows: string[] }
+  | {
+      type: "downloadProgress";
+      windowId: string;
+      bytesReceived: number;
+      totalBytes: number;
+      percentage: number;
+    }
+  | { type: "downloadComplete"; result: TransferResult }
+  | {
+      type: "error";
+      error: { code: string; message: string; timestamp: number };
+    };
 
 export type BluetoothEventListener = (event: BluetoothManagerEvent) => void;
 
 // Firmware command types (matches handleCommand switch in 4sight.js)
 type FourSightCommand =
-  | { type: 'start_recording' }
-  | { type: 'stop_recording' }
-  | { type: 'get_status' }
-  | { type: 'get_queue' }
-  | { type: 'get_window_data'; windowId: string }
-  | { type: 'confirm_upload'; windowId: string }
-  | { type: 'delete_all_windows' };
+  | { type: "start_recording" }
+  | { type: "stop_recording" }
+  | { type: "get_status" }
+  | { type: "get_queue" }
+  | { type: "get_window_data"; windowId: string }
+  | { type: "confirm_upload"; windowId: string }
+  | { type: "delete_all_windows" };
 
 // ============================================================================
 // BLUETOOTH MANAGER
@@ -107,8 +137,8 @@ class BluetoothManagerClass {
   private disconnectSubscription: { remove: () => void } | null = null;
 
   private state: BluetoothManagerState = {
-    bluetoothState: 'unknown',
-    connectionState: 'disconnected',
+    bluetoothState: "unknown",
+    connectionState: "disconnected",
     isScanning: false,
     discoveredDevices: [],
     connectedDeviceId: null,
@@ -153,9 +183,17 @@ class BluetoothManagerClass {
 
   initialize(): void {
     if (this.manager) return;
-    this.manager = new BleManager();
-    this.manager.onStateChange((s: State) => this.handleBluetoothStateChange(s), true);
-    this.log('Initialized');
+    try {
+      this.manager = new BleManager();
+      this.manager.onStateChange(
+        (s: State) => this.handleBluetoothStateChange(s),
+        true,
+      );
+      this.log("Initialized");
+    } catch (e) {
+      console.warn("[BLE] Failed to initialize BleManager:", e);
+      this.manager = null;
+    }
   }
 
   destroy(): void {
@@ -171,7 +209,7 @@ class BluetoothManagerClass {
     this.rxCharacteristic = null;
     this.controlBufferLength = 0;
     this.listeners.clear();
-    this.log('Destroyed');
+    this.log("Destroyed");
   }
 
   // ============================================================================
@@ -189,7 +227,11 @@ class BluetoothManagerClass {
 
   private emit(event: BluetoothManagerEvent): void {
     this.listeners.forEach((fn) => {
-      try { fn(event); } catch (e) { console.error('Event listener error:', e); }
+      try {
+        fn(event);
+      } catch (e) {
+        console.error("Event listener error:", e);
+      }
     });
   }
 
@@ -199,52 +241,58 @@ class BluetoothManagerClass {
 
   startScanning(): void {
     if (!this.manager || !this.isBluetoothReady()) {
-      this.handleError('BLUETOOTH_UNAVAILABLE', 'Bluetooth not ready');
+      this.handleError("BLUETOOTH_UNAVAILABLE", "Bluetooth not ready");
       return;
     }
     if (this.state.isScanning) return;
 
     this.state.isScanning = true;
     this.state.discoveredDevices = [];
-    this.emit({ type: 'connectionStateChanged', state: 'scanning' });
-    this.log('Scanning...');
+    this.emit({ type: "connectionStateChanged", state: "scanning" });
+    this.log("Scanning...");
 
-    this.manager.startDeviceScan(null, { allowDuplicates: false }, (error: BleError | null, device: Device | null) => {
-      if (error) {
-        this.handleError('SCAN_ERROR', error.message);
-        return;
-      }
-      if (device?.name?.toLowerCase().includes('bangle')) {
-        this.handleDeviceDiscovered(device);
-      }
-    });
+    this.manager.startDeviceScan(
+      null,
+      { allowDuplicates: false },
+      (error: BleError | null, device: Device | null) => {
+        if (error) {
+          this.handleError("SCAN_ERROR", error.message);
+          return;
+        }
+        if (device?.name?.toLowerCase().includes("bangle")) {
+          this.handleDeviceDiscovered(device);
+        }
+      },
+    );
   }
 
   stopScanning(): void {
     if (!this.state.isScanning) return;
     this.manager?.stopDeviceScan();
     this.state.isScanning = false;
-    if (this.state.connectionState === 'scanning') {
-      this.state.connectionState = 'disconnected';
-      this.emit({ type: 'connectionStateChanged', state: 'disconnected' });
+    if (this.state.connectionState === "scanning") {
+      this.state.connectionState = "disconnected";
+      this.emit({ type: "connectionStateChanged", state: "disconnected" });
     }
-    this.log('Scan stopped');
+    this.log("Scan stopped");
   }
 
   private handleDeviceDiscovered(device: Device): void {
     const bleDevice: BleDevice = {
       id: device.id,
-      name: device.name || 'Bangle.js',
+      name: device.name || "Bangle.js",
       rssi: device.rssi || -100,
     };
-    const idx = this.state.discoveredDevices.findIndex((d) => d.id === device.id);
+    const idx = this.state.discoveredDevices.findIndex(
+      (d) => d.id === device.id,
+    );
     if (idx >= 0) {
       this.state.discoveredDevices[idx] = bleDevice;
     } else {
       this.state.discoveredDevices.push(bleDevice);
       this.log(`Found: ${bleDevice.name} (${bleDevice.id})`);
     }
-    this.emit({ type: 'deviceDiscovered', device: bleDevice });
+    this.emit({ type: "deviceDiscovered", device: bleDevice });
   }
 
   // ============================================================================
@@ -252,20 +300,25 @@ class BluetoothManagerClass {
   // ============================================================================
 
   async connect(deviceId: string): Promise<void> {
-    if (!this.manager) throw new Error('BLE manager not initialized');
-    if (!this.isBluetoothReady()) throw new Error('Bluetooth not ready');
-    if (this.state.connectionState === 'connected') throw new Error('Already connected');
+    if (!this.manager) throw new Error("BLE manager not initialized");
+    if (!this.isBluetoothReady()) throw new Error("Bluetooth not ready");
+    if (this.state.connectionState === "connected")
+      throw new Error("Already connected");
 
     this.stopScanning();
     this.state.lastError = null;
 
     const device = this.state.discoveredDevices.find((d) => d.id === deviceId);
-    const deviceName = device?.name || 'Unknown';
+    const deviceName = device?.name || "Unknown";
 
-    this.state.connectionState = 'connecting';
+    this.state.connectionState = "connecting";
     this.state.connectedDeviceId = deviceId;
     this.state.connectedDeviceName = deviceName;
-    this.emit({ type: 'connectionStateChanged', state: 'connecting', deviceName });
+    this.emit({
+      type: "connectionStateChanged",
+      state: "connecting",
+      deviceName,
+    });
     this.log(`Connecting to ${deviceName}...`);
 
     this.connectionTimeoutId = setTimeout(() => {
@@ -289,31 +342,52 @@ class BluetoothManagerClass {
 
       // Find NUS service + characteristics
       const services = await connected.services();
-      const nus = services.find((s: { uuid: string }) => s.uuid.toLowerCase() === NUS_SERVICE_UUID);
-      if (!nus) throw new Error('NUS service not found');
+      const nus = services.find(
+        (s: { uuid: string }) => s.uuid.toLowerCase() === NUS_SERVICE_UUID,
+      );
+      if (!nus) throw new Error("NUS service not found");
 
       const chars = await nus.characteristics();
-      this.txCharacteristic = chars.find((c: Characteristic) => c.uuid.toLowerCase() === NUS_TX_CHAR_UUID) || null;
-      this.rxCharacteristic = chars.find((c: Characteristic) => c.uuid.toLowerCase() === NUS_RX_CHAR_UUID) || null;
-      if (!this.txCharacteristic || !this.rxCharacteristic) throw new Error('NUS characteristics not found');
+      this.txCharacteristic =
+        chars.find(
+          (c: Characteristic) => c.uuid.toLowerCase() === NUS_TX_CHAR_UUID,
+        ) || null;
+      this.rxCharacteristic =
+        chars.find(
+          (c: Characteristic) => c.uuid.toLowerCase() === NUS_RX_CHAR_UUID,
+        ) || null;
+      if (!this.txCharacteristic || !this.rxCharacteristic)
+        throw new Error("NUS characteristics not found");
 
       // Subscribe to notifications (incoming data from watch)
-      this.notificationSubscription = this.txCharacteristic.monitor((error: BleError | null, char: Characteristic | null) => {
-        if (error) { this.log(`Notification error: ${error.message}`); return; }
-        if (char?.value) this.handleIncomingData(char.value);
-      });
+      this.notificationSubscription = this.txCharacteristic.monitor(
+        (error: BleError | null, char: Characteristic | null) => {
+          if (error) {
+            this.log(`Notification error: ${error.message}`);
+            return;
+          }
+          if (char?.value) this.handleIncomingData(char.value);
+        },
+      );
 
       this.connectedDevice = connected;
 
       // Disconnection handler
       this.disconnectSubscription?.remove();
-      this.disconnectSubscription = this.manager.onDeviceDisconnected(deviceId, (err: BleError | null) => {
-        this.handleDisconnection(err ?? undefined);
-      });
+      this.disconnectSubscription = this.manager.onDeviceDisconnected(
+        deviceId,
+        (err: BleError | null) => {
+          this.handleDisconnection(err ?? undefined);
+        },
+      );
 
       this.clearConnectionTimeout();
-      this.state.connectionState = 'connected';
-      this.emit({ type: 'connectionStateChanged', state: 'connected', deviceName });
+      this.state.connectionState = "connected";
+      this.emit({
+        type: "connectionStateChanged",
+        state: "connected",
+        deviceName,
+      });
       this.log(`Connected to ${deviceName}`);
 
       // Start polling
@@ -324,43 +398,45 @@ class BluetoothManagerClass {
       }, 300);
     } catch (error) {
       this.clearConnectionTimeout();
-      this.state.connectionState = 'error';
+      this.state.connectionState = "error";
       this.state.connectedDeviceId = null;
       this.state.connectedDeviceName = null;
       this.connectedDevice = null;
-      const msg = error instanceof Error ? error.message : 'Connection failed';
-      this.handleError('CONNECTION_FAILED', msg);
-      this.emit({ type: 'connectionStateChanged', state: 'error' });
+      const msg = error instanceof Error ? error.message : "Connection failed";
+      this.handleError("CONNECTION_FAILED", msg);
+      this.emit({ type: "connectionStateChanged", state: "error" });
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
     if (!this.connectedDevice) return;
-    this.log('Disconnecting...');
+    this.log("Disconnecting...");
     this.stopStatusPolling();
     this.clearConnectionTimeout();
     this.cancelTransfer();
-    try { await this.connectedDevice.cancelConnection(); } catch {}
+    try {
+      await this.connectedDevice.cancelConnection();
+    } catch {}
     this.cleanupConnection();
-    this.state.connectionState = 'disconnected';
-    this.emit({ type: 'connectionStateChanged', state: 'disconnected' });
+    this.state.connectionState = "disconnected";
+    this.emit({ type: "connectionStateChanged", state: "disconnected" });
   }
 
   private handleDisconnection(error?: BleError): void {
-    this.log(error ? `Disconnected: ${error.message}` : 'Disconnected');
+    this.log(error ? `Disconnected: ${error.message}` : "Disconnected");
     this.cleanupConnection();
-    this.state.connectionState = 'disconnected';
-    this.emit({ type: 'connectionStateChanged', state: 'disconnected' });
+    this.state.connectionState = "disconnected";
+    this.emit({ type: "connectionStateChanged", state: "disconnected" });
   }
 
   private handleConnectionTimeout(deviceId: string): void {
-    this.log('Connection timeout');
+    this.log("Connection timeout");
     this.manager?.cancelDeviceConnection(deviceId).catch(() => {});
     this.cleanupConnection();
-    this.state.connectionState = 'error';
-    this.handleError('CONNECTION_TIMEOUT', 'Connection timed out');
-    this.emit({ type: 'connectionStateChanged', state: 'error' });
+    this.state.connectionState = "error";
+    this.handleError("CONNECTION_TIMEOUT", "Connection timed out");
+    this.emit({ type: "connectionStateChanged", state: "error" });
   }
 
   private cleanupConnection(): void {
@@ -398,9 +474,8 @@ class BluetoothManagerClass {
     if (!this.connectedDevice || !this.rxCharacteristic) return;
 
     const json = JSON.stringify(command);
-    // X10 framing: \x10X({json}\n) — bypasses Espruino REPL
-    const framed = `\x10X(${json})\n`;
-    this.writeToBle(framed);
+    // Raw JSON — firmware UART handler accepts bare {…}\n lines
+    this.writeToBle(`${json}\n`);
   }
 
   private async writeToBle(data: string): Promise<void> {
@@ -408,14 +483,18 @@ class BluetoothManagerClass {
     if (!characteristic) return;
 
     try {
-      // Chunk to fit within MTU (base64 expands 4/3)
-      const mtuPayload = Math.max(20, (this.negotiatedMtu || 23) - 3);
-      const rawChunkSize = Math.floor(mtuPayload * 3 / 4);
+      // Convert string to bytes so control chars (like \x10) survive base64 round-trip
+      const bytes = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
 
-      for (let i = 0; i < data.length; i += rawChunkSize) {
-        const chunk = data.slice(i, i + rawChunkSize);
-        await this.writeWithTimeout(characteristic, btoa(chunk));
-        if (i + rawChunkSize < data.length) {
+      // Chunk to fit within MTU
+      const mtuPayload = Math.max(20, (this.negotiatedMtu || 23) - 3);
+
+      for (let i = 0; i < bytes.length; i += mtuPayload) {
+        const chunk = bytes.subarray(i, Math.min(i + mtuPayload, bytes.length));
+        const b64 = this.uint8ToBase64(chunk);
+        await this.writeWithTimeout(characteristic, b64);
+        if (i + mtuPayload < bytes.length) {
           await new Promise((r) => setTimeout(r, 5));
         }
       }
@@ -424,9 +503,21 @@ class BluetoothManagerClass {
     }
   }
 
-  private async writeWithTimeout(characteristic: Characteristic, data: string, timeoutMs = 5000): Promise<void> {
+  private uint8ToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  private async writeWithTimeout(
+    characteristic: Characteristic,
+    data: string,
+    timeoutMs = 5000,
+  ): Promise<void> {
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('BLE write timeout')), timeoutMs);
+      setTimeout(() => reject(new Error("BLE write timeout")), timeoutMs);
     });
     await Promise.race([characteristic.writeWithoutResponse(data), timeout]);
   }
@@ -439,6 +530,8 @@ class BluetoothManagerClass {
     const raw = atob(base64Data);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    // this.log(`RX ${bytes.length} bytes`);
 
     // Route binary data during active transfer
     if (this.transferActive) {
@@ -453,7 +546,10 @@ class BluetoothManagerClass {
 
   private appendToControlBuffer(data: Uint8Array): void {
     if (this.controlBufferLength + data.length > this.controlBuffer.length) {
-      const newSize = Math.max(this.controlBuffer.length * 2, this.controlBufferLength + data.length + 1024);
+      const newSize = Math.max(
+        this.controlBuffer.length * 2,
+        this.controlBufferLength + data.length + 1024,
+      );
       const newBuf = new Uint8Array(newSize);
       newBuf.set(this.controlBuffer.subarray(0, this.controlBufferLength));
       this.controlBuffer = newBuf;
@@ -469,10 +565,15 @@ class BluetoothManagerClass {
     if (this.controlBufferLength > Config.MAX_CONTROL_LINE_BYTES) {
       let hasNl = false;
       for (let i = 0; i < this.controlBufferLength; i++) {
-        if (this.controlBuffer[i] === NL) { hasNl = true; break; }
+        if (this.controlBuffer[i] === NL) {
+          hasNl = true;
+          break;
+        }
       }
       if (!hasNl) {
-        this.log(`Control buffer overflow (${this.controlBufferLength} bytes), clearing`);
+        this.log(
+          `Control buffer overflow (${this.controlBufferLength} bytes), clearing`,
+        );
         this.controlBufferLength = 0;
         return;
       }
@@ -481,15 +582,20 @@ class BluetoothManagerClass {
     while (true) {
       let nlIdx = -1;
       for (let i = 0; i < this.controlBufferLength; i++) {
-        if (this.controlBuffer[i] === NL) { nlIdx = i; break; }
+        if (this.controlBuffer[i] === NL) {
+          nlIdx = i;
+          break;
+        }
       }
       if (nlIdx === -1) break;
 
-      const line = new TextDecoder().decode(this.controlBuffer.subarray(0, nlIdx)).trim();
+      const line = new TextDecoder()
+        .decode(this.controlBuffer.subarray(0, nlIdx))
+        .trim();
       this.controlBuffer.copyWithin(0, nlIdx + 1, this.controlBufferLength);
       this.controlBufferLength -= nlIdx + 1;
 
-      if (line.startsWith('{')) {
+      if (line.startsWith("{")) {
         this.handleJsonLine(line);
       }
     }
@@ -497,12 +603,12 @@ class BluetoothManagerClass {
 
   private handleJsonLine(line: string): void {
     // Handle concatenated JSON objects
-    if (line.includes('}{')) {
-      const parts = line.split('}{');
+    if (line.includes("}{")) {
+      const parts = line.split("}{");
       for (let i = 0; i < parts.length; i++) {
         let s = parts[i];
-        if (i > 0) s = '{' + s;
-        if (i < parts.length - 1) s += '}';
+        if (i > 0) s = "{" + s;
+        if (i < parts.length - 1) s += "}";
         this.parseAndHandle(s);
       }
       return;
@@ -512,26 +618,30 @@ class BluetoothManagerClass {
 
   private parseAndHandle(jsonStr: string): void {
     let msg: Record<string, unknown>;
-    try { msg = JSON.parse(jsonStr); } catch { return; }
-    if (!msg || typeof msg.type !== 'string') return;
+    try {
+      msg = JSON.parse(jsonStr);
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg.type !== "string") return;
 
     switch (msg.type) {
-      case 'status':
+      case "status":
         this.handleStatusResponse(msg);
         break;
-      case 'queue':
+      case "queue":
         this.handleQueueResponse(msg);
         break;
-      case 'window_data':
+      case "window_data":
         this.handleWindowDataHeader(msg);
         break;
-      case 'end':
+      case "end":
         this.handleTransferEnd(msg);
         break;
-      case 'ack':
-        // Command acknowledged, nothing to do
+      case "ack":
+        this.handleAck(msg);
         break;
-      case 'error':
+      case "error":
         this.log(`Device error: cmd=${msg.cmd}, message=${msg.message}`);
         break;
       default:
@@ -547,13 +657,40 @@ class BluetoothManagerClass {
     const status: DeviceStatus = {
       recording: Boolean(msg.recording),
       recordingMode: Boolean(msg.recordingMode),
-      chunk: typeof msg.chunk === 'number' ? msg.chunk : 0,
-      battery: typeof msg.battery === 'number' ? msg.battery : -1,
-      winId: typeof msg.winId === 'string' ? msg.winId : null,
-      queueLen: typeof msg.queueLen === 'number' ? msg.queueLen : 0,
+      chunk: typeof msg.chunk === "number" ? msg.chunk : 0,
+      battery: typeof msg.battery === "number" ? msg.battery : -1,
+      winId: typeof msg.winId === "string" ? msg.winId : null,
+      queueLen: typeof msg.queueLen === "number" ? msg.queueLen : 0,
     };
     this.state.deviceStatus = status;
-    this.emit({ type: 'statusUpdated', status });
+    this.emit({ type: "statusUpdated", status });
+  }
+
+  private handleAck(msg: Record<string, unknown>): void {
+    const cmd = msg.cmd as string | undefined;
+    if (cmd === "start_recording") {
+      // Optimistically update so UI reacts immediately
+      if (this.state.deviceStatus) {
+        this.state.deviceStatus = {
+          ...this.state.deviceStatus,
+          recording: true,
+          recordingMode: true,
+        };
+        this.emit({ type: "statusUpdated", status: this.state.deviceStatus });
+      }
+      // Also request authoritative status from the device
+      this.requestStatus();
+    } else if (cmd === "stop_recording") {
+      if (this.state.deviceStatus) {
+        this.state.deviceStatus = {
+          ...this.state.deviceStatus,
+          recording: false,
+          recordingMode: false,
+        };
+        this.emit({ type: "statusUpdated", status: this.state.deviceStatus });
+      }
+      this.requestStatus();
+    }
   }
 
   private handleQueueResponse(msg: Record<string, unknown>): void {
@@ -563,7 +700,7 @@ class BluetoothManagerClass {
     if (windows.length !== prevLen) {
       this.log(`Queue: ${windows.length} windows`);
     }
-    this.emit({ type: 'queueUpdated', windows });
+    this.emit({ type: "queueUpdated", windows });
   }
 
   // ============================================================================
@@ -572,15 +709,18 @@ class BluetoothManagerClass {
 
   private handleWindowDataHeader(msg: Record<string, unknown>): void {
     if (this.transferActive) {
-      this.log('Transfer already active, ignoring header');
+      this.log("Transfer already active, ignoring header");
       return;
     }
-    const windowId = String(msg.windowId ?? '');
-    const ppgLen = typeof msg.ppgLen === 'number' ? msg.ppgLen : 0;
-    const accelLen = typeof msg.accelLen === 'number' ? msg.accelLen : 0;
-    const totalLength = typeof msg.totalLength === 'number' ? msg.totalLength : ppgLen + accelLen;
+    const windowId = String(msg.windowId ?? "");
+    const ppgLen = typeof msg.ppgLen === "number" ? msg.ppgLen : 0;
+    const accelLen = typeof msg.accelLen === "number" ? msg.accelLen : 0;
+    const totalLength =
+      typeof msg.totalLength === "number" ? msg.totalLength : ppgLen + accelLen;
 
-    this.log(`Transfer header: windowId=${windowId}, ppg=${ppgLen}, accel=${accelLen}, total=${totalLength}`);
+    this.log(
+      `Transfer header: windowId=${windowId}, ppg=${ppgLen}, accel=${accelLen}, total=${totalLength}`,
+    );
 
     this.transferWindowId = windowId;
     this.transferPpgLen = ppgLen;
@@ -625,10 +765,12 @@ class BluetoothManagerClass {
 
     // Emit progress
     if (this.transferTotalLen > 0) {
-      const pct = Math.round((this.transferOffset / this.transferTotalLen) * 100);
+      const pct = Math.round(
+        (this.transferOffset / this.transferTotalLen) * 100,
+      );
       this.state.downloadProgress = pct;
       this.emit({
-        type: 'downloadProgress',
+        type: "downloadProgress",
         windowId: this.transferWindowId!,
         bytesReceived: this.transferOffset,
         totalBytes: this.transferTotalLen,
@@ -643,7 +785,7 @@ class BluetoothManagerClass {
   }
 
   private handleTransferEnd(msg: Record<string, unknown>): void {
-    const windowId = String(msg.windowId ?? this.transferWindowId ?? '');
+    const windowId = String(msg.windowId ?? this.transferWindowId ?? "");
     if (this.transferTimeoutId) {
       clearTimeout(this.transferTimeoutId);
       this.transferTimeoutId = null;
@@ -652,7 +794,10 @@ class BluetoothManagerClass {
     const result: TransferResult = {
       windowId,
       ppgData: this.transferBuffer.slice(0, this.transferPpgLen),
-      accelData: this.transferBuffer.slice(this.transferPpgLen, this.transferPpgLen + this.transferAccelLen),
+      accelData: this.transferBuffer.slice(
+        this.transferPpgLen,
+        this.transferPpgLen + this.transferAccelLen,
+      ),
       ppgLen: this.transferPpgLen,
       accelLen: this.transferAccelLen,
     };
@@ -670,7 +815,7 @@ class BluetoothManagerClass {
 
     this.state.isDownloading = false;
     this.state.downloadProgress = 0;
-    this.emit({ type: 'downloadComplete', result });
+    this.emit({ type: "downloadComplete", result });
     this.startStatusPolling();
   }
 
@@ -695,7 +840,10 @@ class BluetoothManagerClass {
   private startStatusPolling(): void {
     if (this.statusPollIntervalId) return;
     this.statusPollTicks = 0;
-    this.statusPollIntervalId = setInterval(() => this.pollStatus(), Config.STATUS_POLL_INTERVAL_MS);
+    this.statusPollIntervalId = setInterval(
+      () => this.pollStatus(),
+      Config.STATUS_POLL_INTERVAL_MS,
+    );
   }
 
   private stopStatusPolling(): void {
@@ -719,39 +867,39 @@ class BluetoothManagerClass {
   // ============================================================================
 
   requestStatus(): void {
-    this.sendCommand({ type: 'get_status' });
+    this.sendCommand({ type: "get_status" });
   }
 
   requestQueue(): void {
-    this.sendCommand({ type: 'get_queue' });
+    this.sendCommand({ type: "get_queue" });
   }
 
   startRecording(): void {
-    this.sendCommand({ type: 'start_recording' });
+    this.sendCommand({ type: "start_recording" });
   }
 
   stopRecording(): void {
-    this.sendCommand({ type: 'stop_recording' });
+    this.sendCommand({ type: "stop_recording" });
   }
 
   downloadWindow(windowId: string): void {
     if (this.state.isDownloading) {
-      this.log('Download already in progress');
+      this.log("Download already in progress");
       return;
     }
     this.state.isDownloading = true;
     this.state.downloadProgress = 0;
     this.stopStatusPolling();
     this.log(`Requesting window data: ${windowId}`);
-    this.sendCommand({ type: 'get_window_data', windowId });
+    this.sendCommand({ type: "get_window_data", windowId });
   }
 
   confirmUpload(windowId: string): void {
-    this.sendCommand({ type: 'confirm_upload', windowId });
+    this.sendCommand({ type: "confirm_upload", windowId });
   }
 
   deleteAllWindows(): void {
-    this.sendCommand({ type: 'delete_all_windows' });
+    this.sendCommand({ type: "delete_all_windows" });
   }
 
   // ============================================================================
@@ -759,34 +907,43 @@ class BluetoothManagerClass {
   // ============================================================================
 
   isBluetoothReady(): boolean {
-    return this.state.bluetoothState === 'poweredOn';
+    return this.state.bluetoothState === "poweredOn";
   }
 
   isConnected(): boolean {
-    return this.state.connectionState === 'connected' && this.connectedDevice !== null;
+    return (
+      this.state.connectionState === "connected" &&
+      this.connectedDevice !== null
+    );
   }
 
   private handleBluetoothStateChange(bleState: State): void {
     const mapped = this.mapState(bleState);
     this.state.bluetoothState = mapped;
-    this.emit({ type: 'bluetoothStateChanged', state: mapped });
+    this.emit({ type: "bluetoothStateChanged", state: mapped });
   }
 
   private mapState(s: State): BluetoothState {
     switch (s) {
-      case State.PoweredOn: return 'poweredOn';
-      case State.PoweredOff: return 'poweredOff';
-      case State.Resetting: return 'resetting';
-      case State.Unauthorized: return 'unauthorized';
-      case State.Unsupported: return 'unsupported';
-      default: return 'unknown';
+      case State.PoweredOn:
+        return "poweredOn";
+      case State.PoweredOff:
+        return "poweredOff";
+      case State.Resetting:
+        return "resetting";
+      case State.Unauthorized:
+        return "unauthorized";
+      case State.Unsupported:
+        return "unsupported";
+      default:
+        return "unknown";
     }
   }
 
   private handleError(code: string, message: string): void {
     const error = { code, message, timestamp: Date.now() };
     this.state.lastError = error;
-    this.emit({ type: 'error', error });
+    this.emit({ type: "error", error });
     this.log(`Error: ${code} — ${message}`);
   }
 
