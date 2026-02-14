@@ -15,6 +15,11 @@ export class BackendContainer extends Container {
   override onError(error: unknown): void {
     console.error("Backend container error:", error);
   }
+
+  override async onActivityExpired(): Promise<void> {
+    // Don't stop — WebSocket activity doesn't reset the sleep timer,
+    // so we keep the container alive as long as it's running.
+  }
 }
 
 export default {
