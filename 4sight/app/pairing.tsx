@@ -50,12 +50,18 @@ export default function PairingScreen() {
     }
   }, [hasDevices, isScanning, isConnecting, isConnected]);
 
-  // Navigate to tabs when connected
+  // Start recording (if not already) and navigate to tabs when connected
+  const hasNavigated = useRef(false);
   useEffect(() => {
-    if (isConnected) {
-      router.replace('/(tabs)');
+    if (!isConnected || !bt.deviceStatus || hasNavigated.current) return;
+    hasNavigated.current = true;
+
+    if (!bt.deviceStatus.recordingMode) {
+      bt.startRecording();
     }
-  }, [isConnected]);
+
+    router.replace('/(tabs)');
+  }, [isConnected, bt.deviceStatus]);
 
   // Animate card background
   useEffect(() => {

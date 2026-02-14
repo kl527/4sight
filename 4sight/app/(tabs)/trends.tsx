@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Fonts } from '@/constants/theme';
 
 export default function TrendsScreen() {
   return (
@@ -20,6 +21,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '400',
     color: '#1B1B1B',
-    fontFamily: 'System',
+    fontFamily: Fonts.sans,
   },
 });

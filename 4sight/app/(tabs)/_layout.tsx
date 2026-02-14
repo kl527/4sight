@@ -2,6 +2,7 @@ import { Tabs, usePathname, useRouter } from 'expo-router';
 import React from 'react';
 import { View, TouchableOpacity, Text, Image, StyleSheet } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import { Fonts } from '@/constants/theme';
 
 function HomeIcon({ active }: { active: boolean }) {
   return (
@@ -152,7 +153,7 @@ const styles = StyleSheet.create({
   foursightText: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontFamily: 'System',
+    fontFamily: Fonts.sansMedium,
     fontWeight: '500',
   },
 });

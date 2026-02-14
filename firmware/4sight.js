@@ -46,6 +46,8 @@ var CONFIG = {
   BLE_PROGRESS_KEEPALIVE_MS: 5000,
   BLE_ACK_PING_MS: 500,
   BLE_ACK_WAIT_MS: 8000,
+  SYNC_PING_INTERVAL_MS: 600000, // 10 minutes
+  SYNC_PING_MIN_QUEUE: 1,
 };
 
 // ============================================
@@ -79,6 +81,9 @@ var state = {
   // Fixed-step sync timestamps
   lastPpgSync: 0,
   lastAccelSync: 0,
+
+  // Sync ping timer
+  syncPingTimer: null,
 };
 
 // ============================================
@@ -329,6 +334,11 @@ function stopWindow() {
 
   // Queue for upload
   addToUploadQueue(state.winId);
+
+  // Notify phone immediately that new data is available
+  if (NRF.getSecurityStatus().connected && bleTransferMode === "idle") {
+    sendSyncPing();
+  }
 
   // Free buffers
   state.ppgData = null;
@@ -878,7 +888,38 @@ function registerUartHandler() {
 }
 
 // ============================================
-// Section 9: Init & Start
+// Section 9: Periodic Sync Ping
+// ============================================
+function sendSyncPing() {
+  var queue = getUploadQueue();
+  if (queue.length >= CONFIG.SYNC_PING_MIN_QUEUE) {
+    sendBleResponse({
+      type: "sync_ready",
+      queueLen: queue.length,
+      battery: E.getBattery(),
+      recording: state.recordingMode,
+    });
+  }
+}
+
+function startSyncPing() {
+  stopSyncPing();
+  state.syncPingTimer = setInterval(function () {
+    if (NRF.getSecurityStatus().connected && bleTransferMode === "idle") {
+      sendSyncPing();
+    }
+  }, CONFIG.SYNC_PING_INTERVAL_MS);
+}
+
+function stopSyncPing() {
+  if (state.syncPingTimer) {
+    clearInterval(state.syncPingTimer);
+    state.syncPingTimer = null;
+  }
+}
+
+// ============================================
+// Section 10: Init & Start
 // ============================================
 function start() {
   if (typeof Bluetooth !== "undefined") {
@@ -887,6 +928,21 @@ function start() {
   }
   registerUartHandler();
   updateDisplay();
+
+  // Start sync ping on BLE connect, stop on disconnect
+  NRF.on("connect", function () {
+    startSyncPing();
+    // Send initial sync_ready shortly after connection
+    setTimeout(sendSyncPing, 2000);
+  });
+  NRF.on("disconnect", function () {
+    stopSyncPing();
+  });
+
+  // If already connected at boot, start immediately
+  if (NRF.getSecurityStatus().connected) {
+    startSyncPing();
+  }
 }
 
 start();

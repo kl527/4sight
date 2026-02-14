@@ -17,6 +17,9 @@ import {
   BleError,
 } from "react-native-ble-plx";
 
+import { extract } from "@/features/feature-extraction/feature-extractor";
+import * as LocalStore from "@/features/storage/local-store";
+
 // ============================================================================
 // BLE CONSTANTS
 // ============================================================================
@@ -36,6 +39,8 @@ const Config = {
   DOWNLOAD_STALL_MAX_MS: 120_000,
   DOWNLOAD_PARTIAL_RATIO_THRESHOLD: 0.9,
   MAX_CONTROL_LINE_BYTES: 4 * 1024,
+  AUTO_SYNC_INTER_WINDOW_DELAY_MS: 1_000,
+  AUTO_SYNC_RETRY_DELAY_MS: 5_000,
 } as const;
 
 const X_NOT_DEFINED_REGEX =
@@ -111,6 +116,7 @@ export interface BluetoothManagerState {
   uploadQueue: string[];
   isDownloading: boolean;
   downloadProgress: number;
+  isAutoSyncing: boolean;
   lastError: { code: string; message: string; timestamp: number } | null;
 }
 
@@ -133,6 +139,8 @@ export type BluetoothManagerEvent =
     }
   | { type: "downloadPartial"; result: PartialTransferResult }
   | { type: "downloadComplete"; result: TransferResult }
+  | { type: "autoSyncStarted"; windowCount: number }
+  | { type: "autoSyncComplete" }
   | {
       type: "error";
       error: { code: string; message: string; timestamp: number };
@@ -177,6 +185,7 @@ class BluetoothManagerClass {
     uploadQueue: [],
     isDownloading: false,
     downloadProgress: 0,
+    isAutoSyncing: false,
     lastError: null,
   };
 
@@ -218,6 +227,11 @@ class BluetoothManagerClass {
   private useX10Framing = true;
   private didAutoFallbackToRawJson = false;
 
+  // Auto-sync state
+  private autoSyncEnabled = true;
+  private autoSyncInProgress = false;
+  private autoSyncQueue: string[] = [];
+
   // Event listeners
   private listeners = new Set<BluetoothEventListener>();
 
@@ -233,6 +247,11 @@ class BluetoothManagerClass {
         (s: State) => this.handleBluetoothStateChange(s),
         true,
       );
+      try {
+        LocalStore.initialize();
+      } catch (err) {
+        console.warn("[BLE] Failed to initialize local store:", err);
+      }
       this.log("Initialized");
     } catch (e) {
       console.warn("[BLE] Failed to initialize BleManager:", e);
@@ -493,6 +512,9 @@ class BluetoothManagerClass {
   private cleanupConnection(): void {
     this.stopStatusPolling();
     this.cancelTransfer();
+    this.autoSyncInProgress = false;
+    this.autoSyncQueue = [];
+    this.state.isAutoSyncing = false;
     this.notificationSubscription?.remove();
     this.notificationSubscription = null;
     this.disconnectSubscription?.remove();
@@ -772,6 +794,9 @@ class BluetoothManagerClass {
       case "error":
         this.handleDeviceError(msg);
         break;
+      case "sync_ready":
+        this.handleSyncReady(msg);
+        break;
       default:
         this.log(`Unknown response type: ${msg.type}`);
     }
@@ -849,6 +874,15 @@ class BluetoothManagerClass {
       (message === "unknown_command" || message === "missing_type")
     ) {
       this.log(`Ignoring optional v2 command error: cmd=${cmd}, message=${message}`);
+      return;
+    }
+
+    // Benign: start_recording when already recording, or stop when not
+    if (
+      (cmd === "start_recording" && message === "already_recording") ||
+      (cmd === "stop_recording" && message === "not_recording")
+    ) {
+      this.log(`Ignoring benign recording error: cmd=${cmd}, message=${message}`);
       return;
     }
 
@@ -1027,6 +1061,10 @@ class BluetoothManagerClass {
     this.state.downloadProgress = 0;
     this.emit({ type: "downloadComplete", result });
     this.startStatusPolling();
+
+    if (this.autoSyncInProgress) {
+      this.handleAutoSyncWindowComplete(result);
+    }
   }
 
   private sendBinaryAckIfNeeded(): void {
@@ -1143,6 +1181,10 @@ class BluetoothManagerClass {
       this.state.downloadProgress = 0;
       this.emit({ type: "downloadPartial", result });
       this.startStatusPolling();
+      if (this.autoSyncInProgress) {
+        this.log(`autoSync: partial download for ${windowId}, skipping to next`);
+        setTimeout(() => this.downloadNextInAutoSync(), Config.AUTO_SYNC_RETRY_DELAY_MS);
+      }
       return;
     }
 
@@ -1151,6 +1193,10 @@ class BluetoothManagerClass {
     this.state.downloadProgress = 0;
     this.handleError("DOWNLOAD_FAILED", message);
     this.startStatusPolling();
+    if (this.autoSyncInProgress) {
+      this.log(`autoSync: download failed for ${windowId}, skipping to next`);
+      setTimeout(() => this.downloadNextInAutoSync(), Config.AUTO_SYNC_RETRY_DELAY_MS);
+    }
   }
 
   private endTransferSession(): void {
@@ -1250,6 +1296,100 @@ class BluetoothManagerClass {
 
   deleteAllWindows(): void {
     this.sendCommand({ type: "delete_all_windows" });
+  }
+
+  // ============================================================================
+  // AUTO-SYNC
+  // ============================================================================
+
+  private handleSyncReady(msg: Record<string, unknown>): void {
+    const queueLen = typeof msg.queueLen === "number" ? msg.queueLen : 0;
+    this.log(`sync_ready: queueLen=${queueLen}`);
+
+    if (!this.autoSyncEnabled || queueLen === 0) return;
+    if (this.autoSyncInProgress || this.state.isDownloading) return;
+
+    this.requestQueue();
+    setTimeout(() => this.startAutoSync(), 500);
+  }
+
+  private startAutoSync(): void {
+    if (this.autoSyncInProgress) return;
+
+    const queue = [...this.state.uploadQueue];
+    if (queue.length === 0) return;
+
+    const toDownload: string[] = [];
+    for (const windowId of queue) {
+      if (!LocalStore.hasWindow(windowId)) {
+        toDownload.push(windowId);
+      } else {
+        this.confirmUpload(windowId);
+      }
+    }
+
+    if (toDownload.length === 0) {
+      this.log("autoSync: all windows already stored locally");
+      return;
+    }
+
+    this.autoSyncInProgress = true;
+    this.autoSyncQueue = toDownload;
+    this.state.isAutoSyncing = true;
+    this.log(`autoSync: starting, ${toDownload.length} windows to download`);
+    this.emit({ type: "autoSyncStarted", windowCount: toDownload.length });
+
+    this.downloadNextInAutoSync();
+  }
+
+  private downloadNextInAutoSync(): void {
+    if (this.autoSyncQueue.length === 0) {
+      this.autoSyncInProgress = false;
+      this.state.isAutoSyncing = false;
+      this.log("autoSync: complete");
+      this.emit({ type: "autoSyncComplete" });
+      this.requestQueue();
+      return;
+    }
+
+    const windowId = this.autoSyncQueue.shift()!;
+    this.log(`autoSync: downloading ${windowId}`);
+    this.downloadWindow(windowId);
+  }
+
+  private handleAutoSyncWindowComplete(result: TransferResult): void {
+    try {
+      const features = extract(
+        result.ppgData,
+        result.accelData,
+        result.windowId,
+        parseInt(result.windowId, 10) || Date.now(),
+      );
+
+      LocalStore.saveWindow(
+        result.windowId,
+        result.ppgData,
+        result.accelData,
+        features,
+      );
+
+      this.confirmUpload(result.windowId);
+      LocalStore.markUploadConfirmed(result.windowId);
+
+      this.log(`autoSync: persisted ${result.windowId}, features=${features !== null}`);
+    } catch (err) {
+      this.log(`autoSync: persist failed for ${result.windowId}: ${err}`);
+    }
+
+    setTimeout(
+      () => this.downloadNextInAutoSync(),
+      Config.AUTO_SYNC_INTER_WINDOW_DELAY_MS,
+    );
+  }
+
+  setAutoSync(enabled: boolean): void {
+    this.autoSyncEnabled = enabled;
+    this.log(`autoSync ${enabled ? "enabled" : "disabled"}`);
   }
 
   // ============================================================================

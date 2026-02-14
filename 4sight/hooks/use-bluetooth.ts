@@ -36,6 +36,7 @@ export function useBluetooth() {
   const deleteAllWindows = useCallback(() => BluetoothManager.deleteAllWindows(), []);
   const requestStatus = useCallback(() => BluetoothManager.requestStatus(), []);
   const requestQueue = useCallback(() => BluetoothManager.requestQueue(), []);
+  const setAutoSync = useCallback((enabled: boolean) => BluetoothManager.setAutoSync(enabled), []);
   return {
     ...state,
     startScanning,
@@ -49,5 +50,6 @@ export function useBluetooth() {
     deleteAllWindows,
     requestStatus,
     requestQueue,
+    setAutoSync,
   };
 }
