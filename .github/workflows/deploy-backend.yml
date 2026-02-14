@@ -29,6 +29,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set MAGIC_WORD secret
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: backend/worker
+          command: secret put MAGIC_WORD --name foresight-backend <<< "${{ vars.MAGIC_WORD }}"
+
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:

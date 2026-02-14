@@ -20,8 +20,26 @@ export class BackendContainer extends Container {
 export default {
   async fetch(
     request: Request,
-    env: { BACKEND: DurableObjectNamespace<BackendContainer> },
+    env: {
+      BACKEND: DurableObjectNamespace<BackendContainer>;
+      MAGIC_WORD: string;
+    },
   ): Promise<Response> {
+    const url = new URL(request.url);
+
+    // health check is public
+    if (url.pathname === "/health") {
+      const container = getContainer(env.BACKEND, "backend");
+      return container.fetch(request);
+    }
+
+    // everything else requires the magic word (header or query param)
+    const magic =
+      request.headers.get("x-magic-word") ?? url.searchParams.get("magic_word");
+    if (!env.MAGIC_WORD || magic !== env.MAGIC_WORD) {
+      return new Response("forbidden", { status: 403 });
+    }
+
     const container = getContainer(env.BACKEND, "backend");
     return container.fetch(request);
   },
