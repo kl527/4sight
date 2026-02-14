@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
   wrapper: {
     marginBottom: 24,
     borderRadius: 12,
-    backgroundColor: '#fff',
+    backgroundColor: '#EDECE7',
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e0e0e0',
