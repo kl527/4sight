@@ -11,7 +11,7 @@ import modal
 APP_NAME = os.getenv("STREAMING_VLM_MODAL_APP_NAME", "foresight-streamingvlm")
 MODEL_PATH = os.getenv("STREAMING_VLM_MODEL_PATH", "mit-han-lab/StreamingVLM")
 MODEL_BASE = os.getenv("STREAMING_VLM_MODEL_BASE", "Qwen2_5")
-GPU_TYPE = os.getenv("STREAMING_VLM_GPU", "L40S")
+GPU_TYPE = os.getenv("STREAMING_VLM_GPU", "A100")
 
 HF_CACHE = modal.Volume.from_name("streaming-vlm-hf-cache", create_if_missing=True)
 
