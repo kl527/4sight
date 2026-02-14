@@ -18,19 +18,18 @@ HF_CACHE = modal.Volume.from_name("streaming-vlm-hf-cache", create_if_missing=Tr
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "git")
+    .pip_install("packaging", "torch==2.7.1")
+    .pip_install("flash-attn==2.8.0.post2", gpu="A100")
     .pip_install(
         "accelerate==1.8.1",
         "decord==0.6.0",
-        "flash-attn==2.8.0.post2",
         "numpy==2.2.6",
         "opencv-python-headless==4.12.0.88",
         "qwen-vl-utils==0.0.11",
         "safetensors==0.5.3",
-        "torch==2.7.1",
         "torchaudio==2.7.1",
         "torchvision==0.22.1",
         "transformers==4.52.4",
-        gpu="A100",
     )
     .run_commands(
         "git clone --depth 1 https://github.com/mit-han-lab/streaming-vlm.git /root/streaming-vlm",
