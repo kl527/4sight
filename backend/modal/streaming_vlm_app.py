@@ -15,14 +15,16 @@ GPU_TYPE = os.getenv("STREAMING_VLM_GPU", "A100")
 
 HF_CACHE = modal.Volume.from_name("streaming-vlm-hf-cache", create_if_missing=True)
 
+# Pre-built wheel from https://github.com/Dao-AILab/flash-attention/releases/tag/v2.8.0.post2
+# Pinned to CUDA 12 / torch 2.7 / Python 3.11 to avoid compiling from source.
+FLASH_ATTN_WHEEL = (
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.0.post2/"
+    "flash_attn-2.8.0.post2+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+)
+
 image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.6.3-devel-ubuntu22.04",
-        add_python="3.11",
-    )
+    modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "git")
-    .pip_install("packaging", "setuptools", "wheel", "torch==2.7.1")
-    .run_commands("pip install flash-attn==2.8.0.post2 --no-build-isolation", gpu="A100")
     .pip_install(
         "accelerate==1.8.1",
         "decord==0.6.0",
@@ -30,9 +32,11 @@ image = (
         "opencv-python-headless==4.12.0.88",
         "qwen-vl-utils==0.0.11",
         "safetensors==0.5.3",
+        "torch==2.7.1",
         "torchaudio==2.7.1",
         "torchvision==0.22.1",
         "transformers==4.52.4",
+        FLASH_ATTN_WHEEL,
     )
     .run_commands(
         "git clone --depth 1 https://github.com/mit-han-lab/streaming-vlm.git /root/streaming-vlm",
