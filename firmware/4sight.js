@@ -1,11 +1,17 @@
 // 4sight - Bangle.js 2 Sensor Data Logger (Espruino 2v28+)
 // Records PPG (25Hz) and Accelerometer (12.5Hz) as binary 1-minute windows
+// Phone triggers recording via BLE commands (X10 framing)
 //
 // Binary formats (little-endian):
 //   4s_<winId>_p.bin (PPG):   repeating 54-byte frames
 //     [uint32 syncTimeMs][uint16 × 25 samples]
 //   4s_<winId>_a.bin (Accel): repeating 154-byte frames (2-sec intervals)
 //     [uint32 syncTimeMs][int16 x,y,z × 25 samples] (Q13: g × 8192)
+//
+// BLE commands (JSON over UART, raw or X10-framed):
+//   {"type":"start_recording"}  - begin continuous 1-min window chain
+//   {"type":"stop_recording"}   - stop recording, return to idle
+//   {"type":"get_status"}       - query current state
 
 // ============================================
 // Section 1: Constants & Config
@@ -16,7 +22,7 @@ var Storage = require("Storage");
 var CONFIG = {
   PPG_HZ: 25,
   ACCEL_HZ: 12.5,
-  ACCEL_SAMPLES_PER_FRAME: 25, // 12.5Hz × 2sec
+  ACCEL_SAMPLES_PER_FRAME: 25,
   PPG_SYNC_MS: 1000,
   ACCEL_SYNC_MS: 2000,
   WINDOW_MS: 60000,
@@ -28,6 +34,8 @@ var CONFIG = {
 // ============================================
 var state = {
   recording: false,
+  recordingMode: false, // phone-initiated recording active
+  chunkIndex: 0, // current 1-min window index
   winId: null,
   startTime: 0,
   windowTimer: null,
@@ -58,7 +66,8 @@ var state = {
 // Section 3: Binary Write Helpers
 // ============================================
 function writeUint32(buf, off, val) {
-  "ram"; "jit";
+  "ram";
+  "jit";
   buf[off] = val & 0xff;
   buf[off + 1] = (val >> 8) & 0xff;
   buf[off + 2] = (val >> 16) & 0xff;
@@ -67,14 +76,16 @@ function writeUint32(buf, off, val) {
 }
 
 function writeUint16(buf, off, val) {
-  "ram"; "jit";
+  "ram";
+  "jit";
   buf[off] = val & 0xff;
   buf[off + 1] = (val >> 8) & 0xff;
   return off + 2;
 }
 
 function writeInt16(buf, off, val) {
-  "ram"; "jit";
+  "ram";
+  "jit";
   var v = val < 0 ? val + 65536 : val;
   buf[off] = v & 0xff;
   buf[off + 1] = (v >> 8) & 0xff;
@@ -132,9 +143,21 @@ function flushAccel(syncTime) {
   for (var i = 0; i < samplesPerFrame; i++) {
     if (i < available) {
       // Q13 fixed-point: g × 8192
-      state.accelOff = writeInt16(state.accelData, state.accelOff, Math.round(state.accelBufX[i] * 8192));
-      state.accelOff = writeInt16(state.accelData, state.accelOff, Math.round(state.accelBufY[i] * 8192));
-      state.accelOff = writeInt16(state.accelData, state.accelOff, Math.round(state.accelBufZ[i] * 8192));
+      state.accelOff = writeInt16(
+        state.accelData,
+        state.accelOff,
+        Math.round(state.accelBufX[i] * 8192),
+      );
+      state.accelOff = writeInt16(
+        state.accelData,
+        state.accelOff,
+        Math.round(state.accelBufY[i] * 8192),
+      );
+      state.accelOff = writeInt16(
+        state.accelData,
+        state.accelOff,
+        Math.round(state.accelBufZ[i] * 8192),
+      );
     } else {
       // Zero-pad if fewer samples than expected
       state.accelOff = writeInt16(state.accelData, state.accelOff, 0);
@@ -219,7 +242,7 @@ function startWindow() {
   state.recording = true;
 
   // Schedule window end
-  state.windowTimer = setTimeout(function() {
+  state.windowTimer = setTimeout(function () {
     stopWindow();
   }, CONFIG.WINDOW_MS);
 }
@@ -242,13 +265,15 @@ function stopWindow() {
     state.lastAccelSync += CONFIG.ACCEL_SYNC_MS;
   }
 
-  // Save binary blobs to Storage
+  // Save binary blobs to Storage (slice to actual written length)
   var base = CONFIG.BASE_PATH + "_" + state.winId;
   if (state.ppgData && state.ppgOff > 0) {
-    Storage.write(base + "_p.bin", state.ppgData, 0, state.ppgOff);
+    var ppgSlice = new Uint8Array(state.ppgData.buffer, 0, state.ppgOff);
+    Storage.write(base + "_p.bin", ppgSlice);
   }
   if (state.accelData && state.accelOff > 0) {
-    Storage.write(base + "_a.bin", state.accelData, 0, state.accelOff);
+    var accelSlice = new Uint8Array(state.accelData.buffer, 0, state.accelOff);
+    Storage.write(base + "_a.bin", accelSlice);
   }
 
   // Free buffers
@@ -256,37 +281,187 @@ function stopWindow() {
   state.accelData = null;
   state.winId = null;
 
-  // Start next window
-  startWindow();
+  // Chain next window only when recording mode is active
+  if (state.recordingMode) {
+    state.chunkIndex++;
+    startWindow();
+    updateDisplay();
+  }
 }
 
 // ============================================
-// Section 7: Init & Start
+// Section 7: Display
 // ============================================
-function start() {
-  // Disable power save FIRST (prevents accel dropping to 1.25Hz)
-  Bangle.setOptions({ powerSave: false });
-
-  // HRM config BEFORE power on
-  Bangle.setOptions({ hrmPollInterval: 40, hrmSportMode: -1 });
-
-  // Power on HRM
-  Bangle.setHRMPower(1, APP_ID);
-
-  // Wear detect AFTER power on (setHRMPower resets it)
-  Bangle.setOptions({ hrmWearDetect: true });
-
-  // Register sensor callbacks
-  Bangle.on('HRM-raw', onHRM);
-  Bangle.on('accel', onAccel);
-
-  // Start first recording window
-  startWindow();
-
-  // Minimal display
+function updateDisplay() {
   g.clear();
   g.setFont("6x8");
-  g.drawString("4sight logging", 10, 10);
+  if (state.recordingMode && state.recording) {
+    g.drawString("4sight recording", 10, 10);
+    g.drawString("chunk " + state.chunkIndex, 10, 25);
+  } else {
+    g.drawString("4sight idle", 10, 10);
+  }
+}
+
+// ============================================
+// Section 8: BLE Command Handler
+// ============================================
+function sendBleResponse(obj) {
+  Bluetooth.println(JSON.stringify(obj));
+}
+
+function startRecording() {
+  if (state.recordingMode) {
+    sendBleResponse({
+      type: "error",
+      cmd: "start_recording",
+      message: "already_recording",
+    });
+    return false;
+  }
+
+  state.recordingMode = true;
+  state.chunkIndex = 0;
+
+  // Power on sensors
+  Bangle.setOptions({ powerSave: false });
+  Bangle.setOptions({ hrmPollInterval: 40, hrmSportMode: -1 });
+  Bangle.setHRMPower(1, APP_ID);
+  Bangle.setOptions({ hrmWearDetect: true });
+  Bangle.on("HRM-raw", onHRM);
+  Bangle.on("accel", onAccel);
+
+  startWindow();
+  updateDisplay();
+  return true;
+}
+
+function stopRecording() {
+  if (!state.recordingMode) {
+    sendBleResponse({
+      type: "error",
+      cmd: "stop_recording",
+      message: "not_recording",
+    });
+    return false;
+  }
+
+  state.recordingMode = false;
+
+  if (state.recording) {
+    stopWindow();
+  }
+
+  // Power off sensors
+  Bangle.removeListener("HRM-raw", onHRM);
+  Bangle.removeListener("accel", onAccel);
+  Bangle.setHRMPower(0, APP_ID);
+
+  updateDisplay();
+  return true;
+}
+
+function handleCommand(json) {
+  var cmd;
+  try {
+    cmd = JSON.parse(json);
+  } catch (e) {
+    sendBleResponse({ type: "error", cmd: "parse", message: "invalid_json" });
+    return;
+  }
+  if (!cmd || !cmd.type) {
+    sendBleResponse({ type: "error", cmd: "unknown", message: "missing_type" });
+    return;
+  }
+
+  switch (cmd.type) {
+    case "start_recording":
+      var started = startRecording();
+      if (started) {
+        sendBleResponse({
+          type: "ack",
+          cmd: "start_recording",
+          recording: true,
+        });
+      }
+      break;
+
+    case "stop_recording":
+      var stopped = stopRecording();
+      sendBleResponse({
+        type: "ack",
+        cmd: "stop_recording",
+        success: stopped,
+        chunks: state.chunkIndex,
+      });
+      break;
+
+    case "get_status":
+      sendBleResponse({
+        type: "status",
+        recording: state.recording,
+        recordingMode: state.recordingMode,
+        chunk: state.chunkIndex,
+        battery: E.getBattery(),
+        winId: state.winId,
+      });
+      break;
+
+    default:
+      sendBleResponse({
+        type: "error",
+        cmd: cmd.type,
+        message: "unknown_command",
+      });
+      break;
+  }
+}
+
+// X10 framing: iOS sends \x10X({...}\n) to avoid Espruino collisions
+var rxBuffer = "";
+function registerUartHandler() {
+  E.on("UART", function (data) {
+    var combined = rxBuffer + data;
+    var trimmed = combined.trimStart();
+    var firstChar = trimmed.length > 0 ? trimmed[0] : "";
+    var isOurCommand = firstChar === "{";
+    if (!isOurCommand && trimmed.length >= 3) {
+      isOurCommand =
+        trimmed[0] === "\x10" && trimmed[1] === "X" && trimmed[2] === "(";
+    }
+    if (rxBuffer.length === 0 && !isOurCommand) return data;
+    if (rxBuffer.length > 0 && !isOurCommand) {
+      rxBuffer = "";
+      return data;
+    }
+    rxBuffer += data;
+    var nl;
+    while ((nl = rxBuffer.indexOf("\n")) !== -1) {
+      var line = rxBuffer.slice(0, nl).trim();
+      rxBuffer = rxBuffer.slice(nl + 1);
+      if (line.length > 0 && line[0] === "{") {
+        handleCommand(line);
+      } else if (
+        line.length > 4 &&
+        line[0] === "\x10" &&
+        line[1] === "X" &&
+        line[2] === "(" &&
+        line[line.length - 1] === ")"
+      ) {
+        var payload = line.slice(3, -1);
+        if (payload[0] === "{") handleCommand(payload);
+      }
+    }
+    return "";
+  });
+}
+
+// ============================================
+// Section 9: Init & Start
+// ============================================
+function start() {
+  registerUartHandler();
+  updateDisplay();
 }
 
 start();
