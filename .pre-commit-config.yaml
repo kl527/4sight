@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: backend-check
+        name: backend tests
+        entry: make -C backend check
+        language: system
+        pass_filenames: false
+        files: ^backend/
+        stages: [pre-commit, pre-push]
