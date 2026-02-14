@@ -232,6 +232,8 @@ class BluetoothManagerClass {
   private autoSyncEnabled = true;
   private autoSyncInProgress = false;
   private autoSyncQueue: string[] = [];
+  private autoSyncTotalWindows = 0;
+  private autoSyncCompletedWindows = 0;
 
   // AppState (iOS background handling)
   private appStateSubscription: { remove: () => void } | null = null;
@@ -527,6 +529,8 @@ class BluetoothManagerClass {
     this.cancelTransfer();
     this.autoSyncInProgress = false;
     this.autoSyncQueue = [];
+    this.autoSyncTotalWindows = 0;
+    this.autoSyncCompletedWindows = 0;
     this.state.isAutoSyncing = false;
     this.notificationSubscription?.remove();
     this.notificationSubscription = null;
@@ -999,9 +1003,15 @@ class BluetoothManagerClass {
 
     // Emit progress
     if (this.transferTotalLen > 0) {
-      const pct = Math.round(
-        (this.transferOffset / this.transferTotalLen) * 100,
-      );
+      const windowPct = (this.transferOffset / this.transferTotalLen) * 100;
+      // During auto-sync, show overall progress across all windows
+      const pct = this.autoSyncInProgress && this.autoSyncTotalWindows > 0
+        ? Math.round(
+            ((this.autoSyncCompletedWindows + windowPct / 100) /
+              this.autoSyncTotalWindows) *
+              100,
+          )
+        : Math.round(windowPct);
       this.state.downloadProgress = pct;
       this.emit({
         type: "downloadProgress",
@@ -1071,7 +1081,7 @@ class BluetoothManagerClass {
     this.log(`Transfer complete: ${windowId} (${this.transferOffset} bytes)`);
     this.endTransferSession();
     this.state.isDownloading = false;
-    this.state.downloadProgress = 0;
+    if (!this.autoSyncInProgress) this.state.downloadProgress = 0;
     this.emit({ type: "downloadComplete", result });
     this.startStatusPolling();
 
@@ -1191,10 +1201,11 @@ class BluetoothManagerClass {
       };
       this.endTransferSession();
       this.state.isDownloading = false;
-      this.state.downloadProgress = 0;
+      if (!this.autoSyncInProgress) this.state.downloadProgress = 0;
       this.emit({ type: "downloadPartial", result });
       this.startStatusPolling();
       if (this.autoSyncInProgress) {
+        this.autoSyncCompletedWindows++;
         this.log(`autoSync: partial download for ${windowId}, skipping to next`);
         setTimeout(() => this.downloadNextInAutoSync(), Config.AUTO_SYNC_RETRY_DELAY_MS);
       }
@@ -1203,10 +1214,11 @@ class BluetoothManagerClass {
 
     this.endTransferSession();
     this.state.isDownloading = false;
-    this.state.downloadProgress = 0;
+    if (!this.autoSyncInProgress) this.state.downloadProgress = 0;
     this.handleError("DOWNLOAD_FAILED", message);
     this.startStatusPolling();
     if (this.autoSyncInProgress) {
+      this.autoSyncCompletedWindows++;
       this.log(`autoSync: download failed for ${windowId}, skipping to next`);
       setTimeout(() => this.downloadNextInAutoSync(), Config.AUTO_SYNC_RETRY_DELAY_MS);
     }
@@ -1348,7 +1360,10 @@ class BluetoothManagerClass {
 
     this.autoSyncInProgress = true;
     this.autoSyncQueue = toDownload;
+    this.autoSyncTotalWindows = toDownload.length;
+    this.autoSyncCompletedWindows = 0;
     this.state.isAutoSyncing = true;
+    this.state.downloadProgress = 0;
     this.log(`autoSync: starting, ${toDownload.length} windows to download`);
     this.emit({ type: "autoSyncStarted", windowCount: toDownload.length });
 
@@ -1358,7 +1373,10 @@ class BluetoothManagerClass {
   private downloadNextInAutoSync(): void {
     if (this.autoSyncQueue.length === 0) {
       this.autoSyncInProgress = false;
+      this.autoSyncTotalWindows = 0;
+      this.autoSyncCompletedWindows = 0;
       this.state.isAutoSyncing = false;
+      this.state.downloadProgress = 0;
       this.log("autoSync: complete");
       this.emit({ type: "autoSyncComplete" });
       this.requestQueue();
@@ -1371,6 +1389,7 @@ class BluetoothManagerClass {
   }
 
   private handleAutoSyncWindowComplete(result: TransferResult): void {
+    this.autoSyncCompletedWindows++;
     try {
       const features = extract(
         result.ppgData,
