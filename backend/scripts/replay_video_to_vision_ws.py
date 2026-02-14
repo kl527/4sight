@@ -196,8 +196,8 @@ def _load_args() -> argparse.Namespace:
     parser.add_argument(
         "--fps",
         type=float,
-        default=None,
-        help="Force send FPS instead of source FPS",
+        default=3.0,
+        help="Sample/send FPS (default: 3)",
     )
     parser.add_argument(
         "--jpeg-quality",

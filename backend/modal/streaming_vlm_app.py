@@ -23,7 +23,7 @@ FLASH_ATTN_WHEEL = (
 )
 
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("python:3.11-slim-bookworm")
     .apt_install("ffmpeg", "git")
     .pip_install(
         "accelerate==1.8.1",
