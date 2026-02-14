@@ -51,7 +51,20 @@ export default {
       return new Response("forbidden", { status: 403 });
     }
 
-    // forward secrets to the container as headers
+    // For WebSocket upgrades, forward the original request directly —
+    // new Request() strips the Upgrade header (forbidden in Fetch spec).
+    // Secrets are injected via container env vars for WS routes.
+    const isUpgrade =
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+
+    const container = getContainer(env.BACKEND, "backend");
+    await container.start();
+
+    if (isUpgrade) {
+      return container.fetch(request);
+    }
+
+    // For regular HTTP: forward secrets to the container as headers
     const headers = new Headers(request.headers);
     if (env.FORESIGHT_POKE_API_KEY) {
       headers.set("x-poke-api-key", env.FORESIGHT_POKE_API_KEY);
@@ -69,9 +82,6 @@ export default {
       headers.set("x-modal-class-name", env.FORESIGHT_MODAL_CLASS_NAME);
     }
     const proxied = new Request(request, { headers });
-
-    const container = getContainer(env.BACKEND, "backend");
-    await container.start();
     return container.fetch(proxied);
   },
 };
