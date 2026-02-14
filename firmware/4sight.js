@@ -552,14 +552,23 @@ function stopRecording() {
   return true;
 }
 
-function handleCommand(json) {
-  var cmd;
-  try {
-    cmd = JSON.parse(json);
-  } catch (e) {
-    sendBleResponse({ type: "error", cmd: "parse", message: "invalid_json" });
-    return;
+function parseCommandInput(input) {
+  if (input && typeof input === "object") return input;
+  if (typeof input === "string") {
+    try {
+      return JSON.parse(input);
+    } catch (e) {
+      sendBleResponse({ type: "error", cmd: "parse", message: "invalid_json" });
+      return null;
+    }
   }
+  sendBleResponse({ type: "error", cmd: "parse", message: "unsupported_input" });
+  return null;
+}
+
+function handleCommand(input) {
+  var cmd = parseCommandInput(input);
+  if (!cmd) return;
   if (!cmd || !cmd.type) {
     sendBleResponse({ type: "error", cmd: "unknown", message: "missing_type" });
     return;
@@ -658,11 +667,15 @@ function handleCommand(json) {
 }
 
 // X10 framing: iOS sends \x10X({...}\n) to avoid Espruino collisions
+global.X = function (msg) {
+  handleCommand(msg);
+};
+
 var rxBuffer = "";
 function registerUartHandler() {
   E.on("UART", function (data) {
     var combined = rxBuffer + data;
-    var trimmed = combined.trimStart();
+    var trimmed = combined.replace(/^\s+/, "");
     var firstChar = trimmed.length > 0 ? trimmed[0] : "";
     var isOurCommand = firstChar === "{";
     if (!isOurCommand && trimmed.length >= 3) {
@@ -704,6 +717,10 @@ function registerUartHandler() {
 // Section 9: Init & Start
 // ============================================
 function start() {
+  if (typeof Bluetooth !== "undefined") {
+    if (Bluetooth.setEcho) Bluetooth.setEcho(false);
+    if (Bluetooth.setConsole) Bluetooth.setConsole(0);
+  }
   registerUartHandler();
   updateDisplay();
 }

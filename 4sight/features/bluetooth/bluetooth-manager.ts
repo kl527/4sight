@@ -33,6 +33,9 @@ const Config = {
   MAX_CONTROL_LINE_BYTES: 4 * 1024,
 } as const;
 
+const X_NOT_DEFINED_REGEX =
+  /ReferenceError:\s*["']?X["']?\s+is\s+not\s+defined/i;
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -173,6 +176,12 @@ class BluetoothManagerClass {
 
   // Connection timeout
   private connectionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  // Write serialization — ensures only one writeToBle runs at a time
+  private writeQueue: Promise<void> = Promise.resolve();
+  // Default framing mode; falls back to raw JSON if watch REPL reports X() missing
+  private useX10Framing = true;
+  private didAutoFallbackToRawJson = false;
 
   // Event listeners
   private listeners = new Set<BluetoothEventListener>();
@@ -451,6 +460,8 @@ class BluetoothManagerClass {
     this.rxCharacteristic = null;
     this.controlBufferLength = 0;
     this.negotiatedMtu = 23;
+    this.useX10Framing = true;
+    this.didAutoFallbackToRawJson = false;
     this.state.connectedDeviceId = null;
     this.state.connectedDeviceName = null;
     this.state.deviceStatus = null;
@@ -471,16 +482,36 @@ class BluetoothManagerClass {
   // ============================================================================
 
   sendCommand(command: FourSightCommand): void {
-    if (!this.connectedDevice || !this.rxCharacteristic) return;
+    if (!this.connectedDevice) {
+      this.log(`sendCommand(${command.type}): no connected device, bailing`);
+      return;
+    }
+    if (!this.rxCharacteristic) {
+      this.log(`sendCommand(${command.type}): no RX characteristic, bailing`);
+      return;
+    }
 
     const json = JSON.stringify(command);
-    // Raw JSON — firmware UART handler accepts bare {…}\n lines
-    this.writeToBle(`${json}\n`);
+    const frame = this.useX10Framing ? `\x10X(${json})\n` : `${json}\n`;
+    this.log(
+      `sendCommand(${command.type}): enqueueing ${frame.length} bytes (framing=${
+        this.useX10Framing ? "x10" : "raw"
+      })`,
+    );
+    // Enqueue to serialize writes — prevents overlapping BLE sends
+    this.enqueueWrite(frame);
+  }
+
+  private enqueueWrite(data: string): void {
+    this.writeQueue = this.writeQueue.then(() => this.writeToBle(data));
   }
 
   private async writeToBle(data: string): Promise<void> {
     const characteristic = this.rxCharacteristic;
-    if (!characteristic) return;
+    if (!characteristic) {
+      this.log("writeToBle: no RX characteristic, skipping");
+      return;
+    }
 
     try {
       // Convert string to bytes so control chars (like \x10) survive base64 round-trip
@@ -489,6 +520,10 @@ class BluetoothManagerClass {
 
       // Chunk to fit within MTU
       const mtuPayload = Math.max(20, (this.negotiatedMtu || 23) - 3);
+      const totalChunks = Math.ceil(bytes.length / mtuPayload);
+      this.log(
+        `writeToBle: ${bytes.length} bytes, mtuPayload=${mtuPayload}, chunks=${totalChunks}`,
+      );
 
       for (let i = 0; i < bytes.length; i += mtuPayload) {
         const chunk = bytes.subarray(i, Math.min(i + mtuPayload, bytes.length));
@@ -498,6 +533,7 @@ class BluetoothManagerClass {
           await new Promise((r) => setTimeout(r, 5));
         }
       }
+      this.log("writeToBle: write complete");
     } catch (error) {
       this.log(`BLE write error: ${error}`);
     }
@@ -531,7 +567,7 @@ class BluetoothManagerClass {
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
-    // this.log(`RX ${bytes.length} bytes`);
+    this.log(`RX ${bytes.length} bytes: ${raw.substring(0, 120)}`);
 
     // Route binary data during active transfer
     if (this.transferActive) {
@@ -595,10 +631,29 @@ class BluetoothManagerClass {
       this.controlBuffer.copyWithin(0, nlIdx + 1, this.controlBufferLength);
       this.controlBufferLength -= nlIdx + 1;
 
+      if (line.length === 0) continue;
       if (line.startsWith("{")) {
         this.handleJsonLine(line);
+      } else {
+        this.handleNonJsonLine(line);
       }
     }
+  }
+
+  private handleNonJsonLine(line: string): void {
+    if (this.useX10Framing && X_NOT_DEFINED_REGEX.test(line)) {
+      this.useX10Framing = false;
+      this.log(
+        "Detected REPL X() ReferenceError; switching to raw JSON framing and retrying get_status",
+      );
+      if (!this.didAutoFallbackToRawJson) {
+        this.didAutoFallbackToRawJson = true;
+        setTimeout(() => this.requestStatus(), 0);
+      }
+      return;
+    }
+
+    this.log(`processControlBuffer: non-JSON line: ${line.substring(0, 100)}`);
   }
 
   private handleJsonLine(line: string): void {
@@ -620,10 +675,15 @@ class BluetoothManagerClass {
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(jsonStr);
-    } catch {
+    } catch (e) {
+      this.log(`parseAndHandle: invalid JSON: ${jsonStr.substring(0, 100)}`);
       return;
     }
-    if (!msg || typeof msg.type !== "string") return;
+    if (!msg || typeof msg.type !== "string") {
+      this.log(`parseAndHandle: no 'type' field: ${jsonStr.substring(0, 100)}`);
+      return;
+    }
+    this.log(`parseAndHandle: type=${msg.type}`);
 
     switch (msg.type) {
       case "status":
@@ -668,6 +728,7 @@ class BluetoothManagerClass {
 
   private handleAck(msg: Record<string, unknown>): void {
     const cmd = msg.cmd as string | undefined;
+    this.log(`handleAck: cmd=${cmd}`);
     if (cmd === "start_recording") {
       // Optimistically update so UI reacts immediately
       if (this.state.deviceStatus) {
@@ -875,6 +936,7 @@ class BluetoothManagerClass {
   }
 
   startRecording(): void {
+    this.log("startRecording() called");
     this.sendCommand({ type: "start_recording" });
   }
 
