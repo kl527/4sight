@@ -1,21 +1,9 @@
 import { Container, getContainer } from "@cloudflare/containers";
 
-export class BackendContainer extends Container<Env> {
+export class BackendContainer extends Container {
   defaultPort = 8080;
   sleepAfter = "5m";
-
-  constructor(ctx: DurableObjectState<Env>, env: Env) {
-    super(ctx, env);
-    // Pass Worker secrets as container env vars so the Python app
-    // can read them via os.getenv() (needed for WebSocket connections
-    // where we can't inject custom headers).
-    this.envVars = {
-      MODAL_TOKEN_ID: env.FORESIGHT_MODAL_TOKEN_ID ?? "",
-      MODAL_TOKEN_SECRET: env.FORESIGHT_MODAL_TOKEN_SECRET ?? "",
-      MODAL_APP_NAME: env.FORESIGHT_MODAL_APP_NAME ?? "",
-      MODAL_CLASS_NAME: env.FORESIGHT_MODAL_CLASS_NAME ?? "",
-    };
-  }
+  envVars = { TEST_VAR: "hello" };
 
   override onStart(): void {
     console.log("Backend container started");
