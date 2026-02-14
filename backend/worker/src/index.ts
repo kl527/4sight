@@ -1,9 +1,13 @@
 import { Container, getContainer } from "@cloudflare/containers";
 
-export class BackendContainer extends Container {
+export class BackendContainer extends Container<Env> {
   defaultPort = 8080;
   sleepAfter = "5m";
-  envVars = { TEST_VAR: "hello" };
+
+  constructor(ctx: DurableObjectState<Env>, env: Env) {
+    super(ctx, env);
+    this.envVars = { TEST_VAR: "from_constructor" };
+  }
 
   override onStart(): void {
     console.log("Backend container started");
