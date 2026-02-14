@@ -37,10 +37,10 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
+    const container = getContainer(env.BACKEND, "backend");
+
     // health check is public
     if (url.pathname === "/health") {
-      const container = getContainer(env.BACKEND, "backend");
-      await container.start();
       return container.fetch(request);
     }
 
@@ -53,12 +53,8 @@ export default {
 
     // For WebSocket upgrades, forward the original request directly —
     // new Request() strips the Upgrade header (forbidden in Fetch spec).
-    // Secrets are injected via container env vars for WS routes.
     const isUpgrade =
       request.headers.get("Upgrade")?.toLowerCase() === "websocket";
-
-    const container = getContainer(env.BACKEND, "backend");
-    await container.start();
 
     if (isUpgrade) {
       return container.fetch(request);
