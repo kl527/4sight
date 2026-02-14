@@ -14,7 +14,6 @@
 //   {"type":"get_status"}                    - query current state
 //   {"type":"get_queue"}                     - list windowIds ready for upload
 //   {"type":"get_window_data","windowId":"X"} - stream binary data for window X
-//   {"type":"next_chunk"}                    - resume chunk pump (flow control)
 //   {"type":"confirm_upload","windowId":"X"} - delete window X after successful upload
 //   {"type":"delete_all_windows"}            - erase all data files + clear queue
 
@@ -339,11 +338,28 @@ function stopWindow() {
 function updateDisplay() {
   g.clear();
   g.setFont("6x8");
+  var y = 10;
+
   if (state.recordingMode && state.recording) {
-    g.drawString("4sight recording", 10, 10);
-    g.drawString("chunk " + state.chunkIndex, 10, 25);
+    g.drawString("4sight REC", 10, y);
+    y += 15;
+    g.drawString("chunk " + state.chunkIndex, 10, y);
   } else {
-    g.drawString("4sight idle", 10, 10);
+    g.drawString("4sight idle", 10, y);
+  }
+  y += 15;
+
+  g.drawString("bat: " + E.getBattery() + "%", 10, y);
+  y += 12;
+
+  var qLen = getUploadQueue().length;
+  if (qLen > 0) {
+    g.drawString("queue: " + qLen, 10, y);
+    y += 12;
+  }
+
+  if (bleTransferActive) {
+    g.drawString("uploading...", 10, y);
   }
 }
 
@@ -355,6 +371,7 @@ var bleTransferId = 0;
 var bleChunkState = null;
 var bleWatchdog = null;
 var blePumpTimer = null;
+var pendingResponses = [];
 
 function cancelBleTransfer(reason) {
   if (blePumpTimer) { clearTimeout(blePumpTimer); blePumpTimer = null; }
@@ -362,6 +379,11 @@ function cancelBleTransfer(reason) {
   bleTransferActive = false;
   bleTransferId++;
   bleChunkState = null;
+  // Flush any responses queued during the transfer
+  while (pendingResponses.length > 0) {
+    var r = pendingResponses.shift();
+    Bluetooth.println(JSON.stringify(r));
+  }
 }
 
 function sendEndMarker(windowId) {
@@ -454,9 +476,13 @@ function sendWindowData(windowId) {
 
   // Watchdog: auto-cancel stalled transfers
   var myId = bleTransferId;
+  var wid = windowId;
   bleWatchdog = setTimeout(function () {
     if (bleTransferActive && bleTransferId === myId) {
       cancelBleTransfer("watchdog");
+      Bluetooth.println(JSON.stringify({
+        type: "error", cmd: "get_window_data", windowId: wid, message: "transfer_timeout"
+      }));
     }
   }, CONFIG.BLE_WATCHDOG_MS);
 
@@ -468,7 +494,10 @@ function sendWindowData(windowId) {
 // Section 8: BLE Command Handler
 // ============================================
 function sendBleResponse(obj) {
-  if (bleTransferActive) return;
+  if (bleTransferActive) {
+    pendingResponses.push(obj);
+    return;
+  }
   Bluetooth.println(JSON.stringify(obj));
 }
 
@@ -550,12 +579,14 @@ function handleCommand(json) {
 
     case "stop_recording":
       var stopped = stopRecording();
-      sendBleResponse({
-        type: "ack",
-        cmd: "stop_recording",
-        success: stopped,
-        chunks: state.chunkIndex,
-      });
+      if (stopped) {
+        sendBleResponse({
+          type: "ack",
+          cmd: "stop_recording",
+          success: true,
+          chunks: state.chunkIndex,
+        });
+      }
       break;
 
     case "get_status":
@@ -585,10 +616,6 @@ function handleCommand(json) {
         break;
       }
       sendWindowData(String(cmd.windowId));
-      break;
-
-    case "next_chunk":
-      sendNextChunk();
       break;
 
     case "confirm_upload":
@@ -648,6 +675,10 @@ function registerUartHandler() {
       return data;
     }
     rxBuffer += data;
+    if (rxBuffer.length > 1024) {
+      rxBuffer = "";
+      return "";
+    }
     var nl;
     while ((nl = rxBuffer.indexOf("\n")) !== -1) {
       var line = rxBuffer.slice(0, nl).trim();
