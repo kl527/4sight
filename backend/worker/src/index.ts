@@ -40,6 +40,7 @@ export default {
     // health check is public
     if (url.pathname === "/health") {
       const container = getContainer(env.BACKEND, "backend");
+      await container.start();
       return container.fetch(request);
     }
 
@@ -70,6 +71,7 @@ export default {
     const proxied = new Request(request, { headers });
 
     const container = getContainer(env.BACKEND, "backend");
+    await container.start();
     return container.fetch(proxied);
   },
 };
