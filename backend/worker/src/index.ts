@@ -2,7 +2,7 @@ import { Container, getContainer } from "@cloudflare/containers";
 
 export class BackendContainer extends Container {
   defaultPort = 8080;
-  sleepAfter = "30s";
+  sleepAfter = "5m";
 
   override onStart(): void {
     console.log("Backend container started");
