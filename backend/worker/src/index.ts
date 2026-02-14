@@ -6,7 +6,12 @@ export class BackendContainer extends Container<Env> {
 
   constructor(ctx: DurableObjectState<Env>, env: Env) {
     super(ctx, env);
-    this.envVars = { TEST_VAR: "from_constructor" };
+    this.envVars = {
+      MODAL_TOKEN_ID: env.FORESIGHT_MODAL_TOKEN_ID ?? "",
+      MODAL_TOKEN_SECRET: env.FORESIGHT_MODAL_TOKEN_SECRET ?? "",
+      MODAL_APP_NAME: env.FORESIGHT_MODAL_APP_NAME ?? "",
+      MODAL_CLASS_NAME: env.FORESIGHT_MODAL_CLASS_NAME ?? "",
+    };
   }
 
   override onStart(): void {
