@@ -68,6 +68,7 @@ def _int_or_none(name: str, default: int | None) -> int | None:
     gpu=GPU_TYPE,
     timeout=1200,
     scaledown_window=300,
+    keep_warm=1,
     volumes={"/root/.cache/huggingface": HF_CACHE},
 )
 class StreamingVLMSession:
