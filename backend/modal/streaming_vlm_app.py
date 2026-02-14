@@ -41,6 +41,7 @@ image = (
     .run_commands(
         "git clone --depth 1 https://github.com/mit-han-lab/streaming-vlm.git /root/streaming-vlm",
         "pip install -e /root/streaming-vlm/streaming_vlm/livecc_utils/",
+        "pip install ffmpeg-python",
     )
 )
 
@@ -68,7 +69,7 @@ def _int_or_none(name: str, default: int | None) -> int | None:
     gpu=GPU_TYPE,
     timeout=1200,
     scaledown_window=300,
-    keep_warm=1,
+    min_containers=1,
     volumes={"/root/.cache/huggingface": HF_CACHE},
 )
 class StreamingVLMSession:
