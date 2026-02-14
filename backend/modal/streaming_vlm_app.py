@@ -21,7 +21,7 @@ image = (
         add_python="3.11",
     )
     .apt_install("ffmpeg", "git")
-    .pip_install("packaging", "torch==2.7.1")
+    .pip_install("packaging", "setuptools", "wheel", "torch==2.7.1")
     .run_commands("pip install flash-attn==2.8.0.post2 --no-build-isolation", gpu="A100")
     .pip_install(
         "accelerate==1.8.1",
