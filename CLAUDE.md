@@ -12,6 +12,71 @@ to test the D1 biometric upload endpoint in prod:
 3. verify rows: `source ~/.env.local && cd backend/worker && npx wrangler d1 execute foresight-biometrics --remote --command "SELECT * FROM biometric_windows ORDER BY id DESC LIMIT 5"`
 4. re-send the same `windowId` to confirm idempotency (`INSERT OR IGNORE` should silently skip duplicates)
 
+to trigger an intervention in prod (upload unhealthy biometrics + food caption, then wait for cron):
+
+1. upload unhealthy biometrics:
+```bash
+curl -X POST https://foresight-backend.jun-871.workers.dev/biometrics/upload \
+  -H "Content-Type: application/json" \
+  -H "x-magic-word: <ask_the_user>" \
+  -d '{
+    "windowId": "unhealthy-test-'"$(date +%s)"'",
+    "timestamp": '"$(date +%s%3N)"',
+    "durationMs": 60000,
+    "qualityScore": 0.92,
+    "hrMean": 142,
+    "hrStd": 38,
+    "hrMin": 98,
+    "hrMax": 185,
+    "meanRR": 422,
+    "sdnn": 18,
+    "rmssd": 12,
+    "pnn50": 4.2,
+    "pnn20": 11.5,
+    "cvnn": 0.042,
+    "cvsd": 0.028,
+    "medianRR": 415,
+    "rangeRR": 380,
+    "movementIntensity": 0.002,
+    "accelEnergy": 12.5,
+    "peakCount": 142,
+    "validRRCount": 140,
+    "riskPrediction": {
+      "riskAssessment": {
+        "stress": {"level": 3, "label": "High Risk", "confidence": 0.89},
+        "health": {"level": 3, "label": "High Risk", "confidence": 0.85},
+        "sleepFatigue": {"level": 2, "label": "Moderate Risk", "confidence": 0.72},
+        "cognitiveFatigue": {"level": 2, "label": "Moderate Risk", "confidence": 0.68},
+        "physicalExertion": {"level": 0, "label": "No Risk", "confidence": 0.91}
+      },
+      "overallSusceptibility": 0.82,
+      "alertLevel": "CRITICAL ALERT",
+      "timeToRiskMinutes": 4.5
+    }
+  }'
+```
+
+2. upload unhealthy food caption:
+```bash
+curl -X POST https://foresight-backend.jun-871.workers.dev/captions/upload \
+  -H "Content-Type: application/json" \
+  -H "x-magic-word: <ask_the_user>" \
+  -d '{
+    "windowId": "unhealthy-caption-'"$(date +%s)"'",
+    "timestamp": '"$(date +%s%3N)"',
+    "chunkStartS": 0,
+    "chunkEndS": 5,
+    "caption": "User is eating a large deep-fried bacon cheeseburger with extra cheese, a side of loaded cheese fries, and drinking a 32oz sugary soda. They are sitting on the couch and have not moved in over an hour.",
+    "latencyMs": 320,
+    "tokensGenerated": 45
+  }'
+```
+
+3. wait up to 60s for cron, then check interventions:
+```bash
+source ~/.env.local && cd backend/worker && npx wrangler d1 execute foresight-biometrics --remote --command "SELECT * FROM interventions ORDER BY id DESC LIMIT 3"
+```
+
 # 4sight — hackathon project
 
 AI health agent that uses real-time biometrics to scare people into being healthy. Think Duolingo's guilt-tripping but for your lifespan. Target demo: biohackers & Bryan Johnson types.
