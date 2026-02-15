@@ -16,8 +16,10 @@ interface RadarChartProps {
 }
 
 export function RadarChart({ labels, values, size = 280 }: RadarChartProps) {
-  const center = size / 2;
-  const radius = size * 0.38; // leave room for labels
+  const padding = 50; // extra room so labels aren't clipped
+  const svgSize = size + padding * 2;
+  const center = svgSize / 2;
+  const radius = size * 0.38;
   const n = labels.length;
 
   const vertices = useMemo(() => {
@@ -33,10 +35,12 @@ export function RadarChart({ labels, values, size = 280 }: RadarChartProps) {
 
   const outlinePoints = vertices.map((v) => `${v.x},${v.y}`).join(' ');
 
+  // Ensure a minimum visible polygon even when all values are near zero
+  const MIN_VISIBLE = 0.08;
   const dataPoints = useMemo(() => {
     return values
       .map((val, i) => {
-        const clamped = Math.max(0, Math.min(1, val));
+        const clamped = Math.max(MIN_VISIBLE, Math.min(1, val));
         const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
         const x = center + radius * clamped * Math.cos(angle);
         const y = center + radius * clamped * Math.sin(angle);
@@ -76,7 +80,7 @@ export function RadarChart({ labels, values, size = 280 }: RadarChartProps) {
 
   return (
     <View style={styles.container}>
-      <Svg width={size} height={size}>
+      <Svg width={size} height={size} viewBox={`0 0 ${svgSize} ${svgSize}`}>
         <Defs>
           <RadialGradient
             id="dataGradient"
@@ -106,21 +110,33 @@ export function RadarChart({ labels, values, size = 280 }: RadarChartProps) {
           stroke="none"
         />
 
-        {/* Labels */}
+        {/* Labels with values */}
         {labels.map((label, i) => {
           const pos = labelPositions[i];
+          const pct = Math.round((values[i] ?? 0) * 100);
           return (
-            <SvgText
-              key={label}
-              x={pos.x}
-              y={pos.y}
-              textAnchor={pos.anchor}
-              fontSize={13}
-              fontFamily={Fonts.sans}
-              fill="#2B2B2B"
-            >
-              {label}
-            </SvgText>
+            <React.Fragment key={label}>
+              <SvgText
+                x={pos.x}
+                y={pos.y}
+                textAnchor={pos.anchor}
+                fontSize={13}
+                fontFamily={Fonts.sans}
+                fill="#2B2B2B"
+              >
+                {label}
+              </SvgText>
+              <SvgText
+                x={pos.x}
+                y={pos.y + 14}
+                textAnchor={pos.anchor}
+                fontSize={11}
+                fontFamily={Fonts.sans}
+                fill="#979592"
+              >
+                {pct}%
+              </SvgText>
+            </React.Fragment>
           );
         })}
       </Svg>

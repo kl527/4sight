@@ -12,7 +12,7 @@ import { BluetoothManager } from '@/features/bluetooth/bluetooth-manager';
 import * as LocalStore from '@/features/storage/local-store';
 import type { WindowRecord } from '@/features/storage/local-store';
 import type { BiosignalFeatures } from '@/features/feature-extraction/types';
-import type { RiskPrediction } from '@/features/risk-prediction';
+import type { RiskPrediction, DimensionRisk } from '@/features/risk-prediction';
 import { decodePPGAsDouble } from '@/features/feature-extraction/binary-decoder';
 import { LineChart } from '@/components/charts/line-chart';
 import { RadarChart } from '@/components/charts/radar-chart';
@@ -111,16 +111,25 @@ function WindowCard({ data }: { data: WindowCardData }) {
   );
 }
 
-/** Convert a RiskPrediction to the 0-1 values the RadarChart expects.
- *  Each dimension's level (0-3) is normalized to 0-1. */
+/** Convert a DimensionRisk to a 0-1 continuous score using its probability
+ *  distribution (weighted average of class indices).  Much smoother than
+ *  the discrete level which is just argmax → 0,1,2,3. */
+function dimensionScore(d: DimensionRisk): number {
+  const probs = d.probabilities;
+  if (!probs || probs.length === 0) return d.level / 3;
+  let score = 0;
+  for (let i = 0; i < probs.length; i++) score += i * probs[i];
+  return score / (probs.length - 1); // normalize to 0-1
+}
+
 function riskToRadarValues(prediction: RiskPrediction): number[] {
   const r = prediction.riskAssessment;
   return [
-    r.stress.level / 3,
-    r.sleepFatigue.level / 3,
-    r.health.level / 3,
-    r.cognitiveFatigue.level / 3,
-    r.physicalExertion.level / 3,
+    dimensionScore(r.stress),
+    dimensionScore(r.health),
+    dimensionScore(r.sleepFatigue),
+    dimensionScore(r.cognitiveFatigue),
+    dimensionScore(r.physicalExertion),
   ];
 }
 
@@ -217,7 +226,7 @@ export default function TrendsScreen() {
       )}
 
       <RadarChart
-        labels={['Stress', 'Sleep/Fatigue', 'Health', 'Cognitive Fatigue', 'Physical Exertion']}
+        labels={['Stress', 'Health', 'Sleep', 'Fatigue', 'Exertion']}
         values={riskData?.values ?? [0, 0, 0, 0, 0]}
       />
       {riskData && (

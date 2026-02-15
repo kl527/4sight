@@ -59,6 +59,11 @@ function parseBaseScore(raw: string | string[]): number {
   if (Array.isArray(raw)) {
     return parseFloat(raw[0]);
   }
+  // Handle string-encoded arrays like '[5E-1]' or '[2.06E-1]'
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    return parseFloat(trimmed.slice(1).replace(']', ''));
+  }
   return parseFloat(raw);
 }
 
@@ -102,9 +107,18 @@ export function predictClassifier(
   const rawBaseScore = model.learner.learner_model_param.base_score;
 
   // Parse per-class base scores
-  const baseScores: number[] = Array.isArray(rawBaseScore)
-    ? rawBaseScore.map((s) => parseFloat(s))
-    : new Array(nClasses).fill(parseFloat(rawBaseScore));
+  let baseScores: number[];
+  if (Array.isArray(rawBaseScore)) {
+    baseScores = rawBaseScore.map((s) => parseFloat(s));
+  } else {
+    // Handle string-encoded JSON array: '[5E-1,5E-1,5E-1,5E-1]'
+    const trimmed = rawBaseScore.trim();
+    if (trimmed.startsWith('[')) {
+      baseScores = trimmed.slice(1, -1).split(',').map((s) => parseFloat(s.trim()));
+    } else {
+      baseScores = new Array(nClasses).fill(parseFloat(rawBaseScore));
+    }
+  }
 
   const rawScores = [...baseScores];
 

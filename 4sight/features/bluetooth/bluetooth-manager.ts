@@ -1458,12 +1458,43 @@ class BluetoothManagerClass {
         features,
       );
 
+      // Log key input features for debugging
+      if (features) {
+        this.log(
+          `features[${result.windowId}]: HR=${features.hrMean?.toFixed(1)} sdnn=${features.sdnn?.toFixed(1)} ` +
+          `rmssd=${features.rmssd?.toFixed(1)} quality=${features.qualityScore?.toFixed(2)} ` +
+          `peaks=${features.peakCount} validRR=${features.validRRCount} ` +
+          `accelEnergy=${features.accelEnergy?.toFixed(2)} movement=${features.movementIntensity?.toFixed(3)}`
+        );
+      }
+
       // Run on-device risk prediction before upload so we can include it
       let prediction: PredictionResult | null = null;
       if (features) {
         prediction = this.riskPredictor.pushAndPredict(features);
         this.emit({ type: "riskPrediction", result: prediction });
-        this.log(`risk: ${prediction.prediction.alertLevel}, susceptibility=${prediction.prediction.overallSusceptibility.toFixed(3)}, windows=${prediction.windowCount}`);
+        const p = prediction.prediction;
+        const r = p.riskAssessment;
+        const dimStr = (label: string, d: { level: number; label: string; confidence: number; probabilities: number[] }) =>
+          `${label}=${d.label}(L${d.level},c=${d.confidence.toFixed(2)},p=[${d.probabilities.map(v => v.toFixed(3)).join(',')}])`;
+        this.log(
+          `risk[${prediction.windowCount}]: ${p.alertLevel} | susceptibility=${p.overallSusceptibility.toFixed(3)} | ` +
+          `${dimStr('stress', r.stress)} ${dimStr('health', r.health)} ` +
+          `${dimStr('sleep', r.sleepFatigue)} ${dimStr('cog', r.cognitiveFatigue)} ` +
+          `${dimStr('exert', r.physicalExertion)} | ` +
+          `timeToRisk=${p.timeToRiskMinutes.toFixed(1)}m [${p.timeToRiskRange.lower.toFixed(1)}-${p.timeToRiskRange.upper.toFixed(1)}] | ` +
+          `confidence: avg=${p.modelConfidence.average.toFixed(3)} min=${p.modelConfidence.min.toFixed(3)}`
+        );
+        const c = prediction.cumulative;
+        const cr = c.riskAssessment;
+        this.log(
+          `risk cumulative: ${c.alertLevel} | susceptibility=${c.overallSusceptibility.toFixed(3)} | ` +
+          `stress=[${cr.stress.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
+          `health=[${cr.health.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
+          `sleep=[${cr.sleepFatigue.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
+          `cog=[${cr.cognitiveFatigue.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
+          `exert=[${cr.physicalExertion.probabilities.map(v => v.toFixed(3)).join(',')}]`
+        );
       }
 
       this.confirmUpload(result.windowId);
