@@ -79,6 +79,7 @@ class Gemma3VLMSession:
         from transformers import AutoProcessor, Gemma3ForConditionalGeneration, set_seed
 
         set_seed(42)
+        torch._dynamo.config.suppress_errors = True
 
         self.cv2 = cv2
         self.np = np
@@ -122,7 +123,9 @@ class Gemma3VLMSession:
         processor_kwargs: dict[str, Any] = {}
         if hf_token:
             processor_kwargs["token"] = hf_token
-        self.processor = AutoProcessor.from_pretrained(MODEL_ID, **processor_kwargs)
+        self.processor = AutoProcessor.from_pretrained(MODEL_ID, use_fast=True, **processor_kwargs)
+        self.model.generation_config.top_k = None
+        self.model.generation_config.top_p = None
         self.model.eval()
 
         self.device = next(self.model.parameters()).device
