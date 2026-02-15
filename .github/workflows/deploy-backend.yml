@@ -32,24 +32,26 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Deploy StreamingVLM app to Modal
+      - name: Deploy Gemma 3 VLM app to Modal
         working-directory: backend
         run: |
-          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-streamingvlm}"
+          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-gemma3-vlm}"
           MODAL_ENVIRONMENT="${FORESIGHT_MODAL_ENVIRONMENT:-main}"
           echo "Deploying Modal app '${MODAL_APP_NAME}' to environment '${MODAL_ENVIRONMENT}'"
-          STREAMING_VLM_MODAL_APP_NAME="$MODAL_APP_NAME" \
-            uv run --with modal modal deploy -e "$MODAL_ENVIRONMENT" modal/streaming_vlm_app.py
+          GEMMA3_VLM_MODAL_APP_NAME="$MODAL_APP_NAME" \
+          GEMMA3_HF_SECRET_NAME="${FORESIGHT_GEMMA3_HF_SECRET_NAME:-}" \
+            uv run --with modal modal deploy -e "$MODAL_ENVIRONMENT" modal/gemma3_vlm_app.py
         env:
           MODAL_TOKEN_ID: ${{ secrets.FORESIGHT_MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.FORESIGHT_MODAL_TOKEN_SECRET }}
           FORESIGHT_MODAL_APP_NAME: ${{ vars.FORESIGHT_MODAL_APP_NAME }}
           FORESIGHT_MODAL_ENVIRONMENT: ${{ vars.FORESIGHT_MODAL_ENVIRONMENT }}
+          FORESIGHT_GEMMA3_HF_SECRET_NAME: ${{ vars.FORESIGHT_GEMMA3_HF_SECRET_NAME }}
 
       - name: Set worker secrets
         run: |
-          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-streamingvlm}"
-          MODAL_CLASS_NAME="${FORESIGHT_MODAL_CLASS_NAME:-StreamingVLMSession}"
+          MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-gemma3-vlm}"
+          MODAL_CLASS_NAME="${FORESIGHT_MODAL_CLASS_NAME_OVERRIDE:-Gemma3VLMSession}"
           echo "$MAGIC_WORD" | pnpm exec wrangler secret put MAGIC_WORD --name foresight-backend
           echo "$FORESIGHT_POKE_API_KEY" | pnpm exec wrangler secret put FORESIGHT_POKE_API_KEY --name foresight-backend
           echo "$FORESIGHT_MODAL_TOKEN_ID" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_ID --name foresight-backend
@@ -62,7 +64,7 @@ jobs:
           FORESIGHT_MODAL_TOKEN_ID: ${{ secrets.FORESIGHT_MODAL_TOKEN_ID }}
           FORESIGHT_MODAL_TOKEN_SECRET: ${{ secrets.FORESIGHT_MODAL_TOKEN_SECRET }}
           FORESIGHT_MODAL_APP_NAME: ${{ vars.FORESIGHT_MODAL_APP_NAME }}
-          FORESIGHT_MODAL_CLASS_NAME: ${{ vars.FORESIGHT_MODAL_CLASS_NAME }}
+          FORESIGHT_MODAL_CLASS_NAME_OVERRIDE: ${{ vars.FORESIGHT_MODAL_CLASS_NAME_OVERRIDE }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 

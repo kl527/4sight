@@ -5,7 +5,11 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
-from app.services.vision_inference import ModalVisionInferenceClient
+from app.services.vision_inference import (
+    DEFAULT_MODAL_APP_NAME,
+    DEFAULT_MODAL_CLASS_NAME,
+    ModalVisionInferenceClient,
+)
 
 
 async def test_open_session_without_credentials_returns_noop(monkeypatch):
@@ -95,3 +99,57 @@ async def test_open_session_with_modal_calls_remote(monkeypatch):
     await session.close()
     assert state["client"].closed is True
     assert state["remote_instance"].closed is True
+
+
+async def test_open_session_uses_gemma_defaults_when_app_and_class_missing(monkeypatch):
+    state: dict[str, object] = {}
+
+    class FakeClient:
+        def close(self):
+            return None
+
+    class FakeClientFactory:
+        @staticmethod
+        def from_credentials(token_id: str, token_secret: str):
+            state["token_id"] = token_id
+            state["token_secret"] = token_secret
+            return FakeClient()
+
+    class RemoteMethod:
+        def __init__(self, func):
+            self._func = func
+
+        def remote(self, *args, **kwargs):
+            return self._func(*args, **kwargs)
+
+    class FakeRemoteInstance:
+        infer_chunk = RemoteMethod(lambda frames, start, end, prompt: {})
+        close = RemoteMethod(lambda: None)
+
+    class FakeRemoteClass:
+        def __call__(self):
+            return FakeRemoteInstance()
+
+    class FakeCls:
+        @staticmethod
+        def from_name(app_name: str, class_name: str, client=None):
+            state["app_name"] = app_name
+            state["class_name"] = class_name
+            state["from_name_client"] = client
+            return FakeRemoteClass()
+
+    fake_modal = SimpleNamespace(Client=FakeClientFactory, Cls=FakeCls)
+    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+    monkeypatch.setenv("FORESIGHT_MODAL_TOKEN_ID", "token-id")
+    monkeypatch.setenv("FORESIGHT_MODAL_TOKEN_SECRET", "token-secret")
+    monkeypatch.delenv("FORESIGHT_MODAL_APP_NAME", raising=False)
+    monkeypatch.delenv("FORESIGHT_MODAL_CLASS_NAME", raising=False)
+    monkeypatch.delenv("MODAL_APP_NAME", raising=False)
+    monkeypatch.delenv("MODAL_CLASS_NAME", raising=False)
+
+    client = ModalVisionInferenceClient()
+    session = await client.open_session(headers={})
+    await session.infer_chunk([b"frame"], 0.0, 1.0, "prompt")
+
+    assert state["app_name"] == DEFAULT_MODAL_APP_NAME
+    assert state["class_name"] == DEFAULT_MODAL_CLASS_NAME

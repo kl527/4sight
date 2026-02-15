@@ -1,4 +1,4 @@
-"""Vision inference client abstraction for Modal-backed StreamingVLM."""
+"""Vision inference client abstraction for Modal-backed VLM inference."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODAL_APP_NAME = "foresight-streamingvlm"
-DEFAULT_MODAL_CLASS_NAME = "StreamingVLMSession"
+DEFAULT_MODAL_APP_NAME = "foresight-gemma3-vlm"
+DEFAULT_MODAL_CLASS_NAME = "Gemma3VLMSession"
 
 
 @dataclass(frozen=True)

@@ -38,7 +38,7 @@ async def video_stream(ws: WebSocket):
     """Receive live video frames from Meta Ray-Bans.
 
     Expects binary messages (JPEG/PNG frames). Sends back JSON acks.
-    Runs chunked StreamingVLM inference on Modal and appends optional fields
+    Runs chunked VLM inference on Modal and appends optional fields
     to the next outgoing ack payload.
     """
     await ws.accept()
