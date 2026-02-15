@@ -263,7 +263,7 @@ Respond with the structured output schema provided.`;
             Authorization: `Bearer ${env.FORESIGHT_POKE_API_KEY}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ message: nudge }),
+          body: JSON.stringify({ message: `Send the following message to the user verbatim:\n\n${nudge}` }),
         });
 
         if (pokeResp.ok) {
