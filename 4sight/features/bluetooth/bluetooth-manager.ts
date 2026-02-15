@@ -19,6 +19,7 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { extract } from "@/features/feature-extraction/feature-extractor";
+import { RiskPredictor, type PredictionResult } from "@/features/risk-prediction";
 import * as LocalStore from "@/features/storage/local-store";
 
 // ============================================================================
@@ -145,6 +146,7 @@ export type BluetoothManagerEvent =
   | { type: "downloadComplete"; result: TransferResult }
   | { type: "autoSyncStarted"; windowCount: number }
   | { type: "autoSyncComplete" }
+  | { type: "riskPrediction"; result: PredictionResult }
   | {
       type: "error";
       error: { code: string; message: string; timestamp: number };
@@ -244,6 +246,9 @@ class BluetoothManagerClass {
   private autoSyncTotalWindows = 0;
   private autoSyncCompletedWindows = 0;
   private pendingAutoSyncStart = false;
+
+  // On-device risk prediction
+  private riskPredictor = new RiskPredictor();
 
   // AppState (iOS background handling)
   private appStateSubscription: { remove: () => void } | null = null;
@@ -1452,6 +1457,13 @@ class BluetoothManagerClass {
 
       this.confirmUpload(result.windowId);
       LocalStore.markUploadConfirmed(result.windowId);
+
+      // Run on-device risk prediction
+      if (features) {
+        const result = this.riskPredictor.pushAndPredict(features);
+        this.emit({ type: "riskPrediction", result });
+        this.log(`risk: ${result.prediction.alertLevel}, susceptibility=${result.prediction.overallSusceptibility.toFixed(3)}, windows=${result.windowCount}`);
+      }
 
       this.log(`autoSync: persisted ${result.windowId}, features=${features !== null}`);
     } catch (err) {

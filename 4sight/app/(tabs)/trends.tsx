@@ -8,11 +8,14 @@ import {
 } from 'react-native';
 import { Fonts } from '@/constants/theme';
 import { useBluetooth } from '@/hooks/use-bluetooth';
+import { BluetoothManager } from '@/features/bluetooth/bluetooth-manager';
 import * as LocalStore from '@/features/storage/local-store';
 import type { WindowRecord } from '@/features/storage/local-store';
 import type { BiosignalFeatures } from '@/features/feature-extraction/types';
+import type { RiskPrediction } from '@/features/risk-prediction';
 import { decodePPGAsDouble } from '@/features/feature-extraction/binary-decoder';
 import { LineChart } from '@/components/charts/line-chart';
+import { RadarChart } from '@/components/charts/radar-chart';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const CARD_PADDING = 16;
@@ -108,10 +111,39 @@ function WindowCard({ data }: { data: WindowCardData }) {
   );
 }
 
+/** Convert a RiskPrediction to the 0-1 values the RadarChart expects.
+ *  Each dimension's level (0-3) is normalized to 0-1. */
+function riskToRadarValues(prediction: RiskPrediction): number[] {
+  const r = prediction.riskAssessment;
+  return [
+    r.stress.level / 3,
+    r.sleepFatigue.level / 3,
+    r.health.level / 3,
+    r.cognitiveFatigue.level / 3,
+    r.physicalExertion.level / 3,
+  ];
+}
+
 export default function TrendsScreen() {
   const { isAutoSyncing } = useBluetooth();
   const [cards, setCards] = useState<WindowCardData[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [riskData, setRiskData] = useState<{ values: number[]; windowCount: number; alertLevel: string } | null>(null);
+
+  // Listen for risk prediction events from the bluetooth manager
+  useEffect(() => {
+    const unsubscribe = BluetoothManager.addEventListener((event) => {
+      if (event.type === 'riskPrediction') {
+        const { cumulative, windowCount } = event.result;
+        setRiskData({
+          values: riskToRadarValues(cumulative),
+          windowCount,
+          alertLevel: cumulative.alertLevel,
+        });
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   const loadWindows = useCallback(() => {
     try {
@@ -184,6 +216,19 @@ export default function TrendsScreen() {
         <Text style={styles.syncingText}>Syncing new windows...</Text>
       )}
 
+      <RadarChart
+        labels={['Stress', 'Sleep/Fatigue', 'Health', 'Cognitive Fatigue', 'Physical Exertion']}
+        values={riskData?.values ?? [0, 0, 0, 0, 0]}
+      />
+      {riskData && (
+        <Text style={styles.radarSubtext}>
+          {riskData.alertLevel} · {riskData.windowCount} window{riskData.windowCount !== 1 ? 's' : ''} analyzed
+        </Text>
+      )}
+      {!riskData && (
+        <Text style={styles.radarSubtext}>Waiting for biometric data...</Text>
+      )}
+
       {cards.length === 0 && !isAutoSyncing && (
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No data yet</Text>
@@ -219,6 +264,13 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontFamily: Fonts.serif,
     color: '#2B2B2B',
+    marginBottom: 8,
+  },
+  radarSubtext: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    color: '#979592',
+    textAlign: 'center',
     marginBottom: 8,
   },
   syncingText: {
