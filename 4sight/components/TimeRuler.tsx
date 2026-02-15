@@ -1,220 +1,272 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Animated, Dimensions, Easing } from 'react-native';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const TICK_WIDTH = 60;
-const VISIBLE_TICKS = 13;
-const CENTER_INDEX = Math.floor(VISIBLE_TICKS / 2);
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const TICK_SPACING = 42;
 
 interface TimeRulerProps {
-  riskStartMinutes: number; // Minutes from now when risk starts
-  riskEndMinutes: number;   // Minutes from now when risk ends
+  riskStartMinutes: number;
+  riskEndMinutes: number;
 }
 
-export const TimeRuler: React.FC<TimeRulerProps> = ({ 
-  riskStartMinutes = 2, 
-  riskEndMinutes = 6 
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const hours = d.getHours() % 12 || 12;
+  const mins = d.getMinutes().toString().padStart(2, '0');
+  return `${hours}:${mins}`;
+}
+
+export const TimeRuler: React.FC<TimeRulerProps> = ({
+  riskStartMinutes,
+  riskEndMinutes,
 }) => {
-  const [currentTime, setCurrentTime] = useState(new Date());
+  // Lock risk window to absolute timestamps so it drifts left naturally
+  const riskWindowRef = useRef({ start: 0, end: 0 });
+  useEffect(() => {
+    const now = Date.now();
+    riskWindowRef.current = {
+      start: now + riskStartMinutes * 60000,
+      end: now + riskEndMinutes * 60000,
+    };
+  }, [riskStartMinutes, riskEndMinutes]);
+
+  // Floor of current time to minute boundary
+  const [baseMinuteMs, setBaseMinuteMs] = useState(() => {
+    const now = Date.now();
+    return now - (now % 60000);
+  });
+
+  const [nowTimeStr, setNowTimeStr] = useState(() => formatTime(Date.now()));
+
   const scrollAnim = useRef(new Animated.Value(0)).current;
-  const lastMinute = useRef(currentTime.getMinutes());
+  const animRef = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
+    const startCycle = () => {
+      const currentMs = Date.now();
+      const msIntoMinute = currentMs % 60000;
+      const msRemaining = 60000 - msIntoMinute;
+      const fraction = msIntoMinute / 60000;
 
-      if (now.getMinutes() !== lastMinute.current) {
-        lastMinute.current = now.getMinutes();
-        
-        scrollAnim.setValue(0);
-        Animated.timing(scrollAnim, {
-          toValue: TICK_WIDTH,
-          duration: 60000,
-          useNativeDriver: true,
-        }).start();
-      }
-    }, 1000);
+      setBaseMinuteMs(currentMs - msIntoMinute);
+      setNowTimeStr(formatTime(currentMs));
 
-    return () => clearInterval(interval);
-  }, []);
+      scrollAnim.setValue(fraction * TICK_SPACING);
 
-  const formatTime = (date: Date, minuteOffset: number): string => {
-    const newDate = new Date(date);
-    newDate.setMinutes(newDate.getMinutes() + minuteOffset);
-    const hours = newDate.getHours();
-    const minutes = newDate.getMinutes();
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes.toString().padStart(2, '0')}`;
-  };
+      animRef.current = Animated.timing(scrollAnim, {
+        toValue: TICK_SPACING,
+        duration: msRemaining,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      });
 
-  const renderTick = (index: number) => {
-    const minuteOffset = index - CENTER_INDEX;
-    const isCenter = index === CENTER_INDEX;
-    const isInDangerZone = 
-      minuteOffset >= riskStartMinutes && 
-      minuteOffset <= riskEndMinutes;
+      animRef.current.start(({ finished }) => {
+        if (finished) {
+          scrollAnim.setValue(0);
+          startCycle();
+        }
+      });
+    };
 
-    const tickColor = isInDangerZone ? '#E07B39' : '#A8D5BA';
-    const tickHeight = isCenter ? 60 : 40;
-    const tickWidth = isCenter ? 12 : 6;
-    const tickOpacity = isInDangerZone ? 1 : 0.6;
+    startCycle();
+    return () => animRef.current?.stop();
+  }, [scrollAnim]);
 
-    return (
-      <View key={index} style={styles.tickContainer}>
-        <Text
-          style={[
-            styles.timeLabel,
-            isCenter && styles.centerTimeLabel,
-            isInDangerZone && !isCenter && styles.dangerTimeLabel,
-          ]}
-        >
-          {formatTime(currentTime, minuteOffset)}
-        </Text>
-        
-        {isCenter && (
-          <Text style={styles.nowLabel}>NOW</Text>
-        )}
+  // Generate enough ticks to fill the screen plus buffer
+  const halfCount = Math.ceil(SCREEN_WIDTH / (2 * TICK_SPACING)) + 3;
 
-        <View
-          style={[
-            styles.tick,
-            {
-              height: tickHeight,
-              width: tickWidth,
-              backgroundColor: tickColor,
-              opacity: tickOpacity,
-            },
-          ]}
-        >
-          {isCenter && <View style={styles.centerGlow} />}
-        </View>
-      </View>
-    );
-  };
+  const ticks: { offset: number; label: string; isInDanger: boolean }[] = [];
+  for (let i = -halfCount; i <= halfCount; i++) {
+    const tickMs = baseMinuteMs + i * 60000;
+    const isInDanger =
+      tickMs < riskWindowRef.current.end &&
+      tickMs + 60000 > riskWindowRef.current.start;
+    ticks.push({ offset: i, label: formatTime(tickMs), isInDanger });
+  }
+
+  // Exact danger overlay pixel position
+  let dangerLeftPx: number | null = null;
+  let dangerWidthPx: number | null = null;
+  if (riskWindowRef.current.end > riskWindowRef.current.start) {
+    const startOff = (riskWindowRef.current.start - baseMinuteMs) / 60000;
+    const endOff = (riskWindowRef.current.end - baseMinuteMs) / 60000;
+    dangerLeftPx = (startOff + halfCount) * TICK_SPACING;
+    dangerWidthPx = (endOff - startOff) * TICK_SPACING;
+  }
+
+  // Position ruler so tick at offset=0 center aligns with screen center
+  const rulerOrigin =
+    SCREEN_WIDTH / 2 - halfCount * TICK_SPACING - TICK_SPACING / 2;
+
+  // Danger window info
+  const dangerDuration = Math.max(0, riskEndMinutes - riskStartMinutes);
+  const minutesUntilEnd = Math.round(
+    (riskWindowRef.current.end - Date.now()) / 60000,
+  );
+  const hasDanger = dangerDuration > 0 && minutesUntilEnd > 0;
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.dangerZoneHighlight,
-          {
-            left: SCREEN_WIDTH / 2 + (riskStartMinutes * TICK_WIDTH) - TICK_WIDTH / 2,
-            width: (riskEndMinutes - riskStartMinutes + 1) * TICK_WIDTH,
-          },
-        ]}
-      />
-
+      {/* Scrolling ruler underneath */}
       <Animated.View
         style={[
           styles.ruler,
           {
+            left: rulerOrigin,
             transform: [
               {
                 translateX: scrollAnim.interpolate({
-                  inputRange: [0, TICK_WIDTH],
-                  outputRange: [0, TICK_WIDTH],
+                  inputRange: [0, TICK_SPACING],
+                  outputRange: [0, -TICK_SPACING],
                 }),
               },
             ],
           },
         ]}
       >
-        {Array.from({ length: VISIBLE_TICKS }).map((_, index) => 
-          renderTick(index)
+        {dangerLeftPx != null && dangerWidthPx != null && dangerWidthPx > 0 && (
+          <View
+            style={[
+              styles.dangerOverlay,
+              { left: dangerLeftPx, width: dangerWidthPx },
+            ]}
+          />
         )}
+
+        {ticks.map((tick) => (
+          <View key={tick.offset} style={styles.tickContainer}>
+            <Text
+              style={[
+                styles.tickLabel,
+                tick.isInDanger && styles.dangerTickLabel,
+              ]}
+            >
+              {tick.label}
+            </Text>
+            <View
+              style={[
+                styles.tickBar,
+                {
+                  backgroundColor: tick.isInDanger ? '#E07B39' : '#A8D5BA',
+                  opacity: tick.isInDanger ? 1 : 0.6,
+                },
+              ]}
+            />
+          </View>
+        ))}
       </Animated.View>
 
-      <View style={styles.infoContainer}>
-        <Text style={styles.infoText}>
-          ⚠️ Danger window: {riskEndMinutes - riskStartMinutes + 1} minutes
-        </Text>
-        <Text style={styles.infoSubtext}>
-          {formatTime(currentTime, riskStartMinutes)} - {formatTime(currentTime, riskEndMinutes)}
-        </Text>
+      {/* Fixed NOW indicator — always at screen center */}
+      <View style={styles.nowContainer} pointerEvents="none">
+        <View style={styles.nowLabelBg}>
+          <Text style={styles.nowTime}>{nowTimeStr}</Text>
+          <Text style={styles.nowSubLabel}>NOW</Text>
+        </View>
+        <View style={styles.nowBar} />
       </View>
+
+      {/* Info footer */}
+      {hasDanger && (
+        <View style={styles.infoContainer}>
+          <Text style={styles.infoText}>
+            Danger window · {dangerDuration} min
+          </Text>
+          <Text style={styles.infoSubtext}>
+            {formatTime(riskWindowRef.current.start)} –{' '}
+            {formatTime(riskWindowRef.current.end)}
+          </Text>
+        </View>
+      )}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    height: 300,
+    height: 240,
     backgroundColor: '#EDECE7',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   ruler: {
+    position: 'absolute',
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingBottom: 60,
-    paddingLeft: SCREEN_WIDTH / 2 - (CENTER_INDEX * TICK_WIDTH),
+    bottom: 60,
+  },
+  dangerOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    height: 70,
+    backgroundColor: '#E07B39',
+    opacity: 0.12,
+    borderRadius: 12,
   },
   tickContainer: {
-    width: TICK_WIDTH,
+    width: TICK_SPACING,
     alignItems: 'center',
-    height: 140,
     justifyContent: 'flex-end',
   },
-  tick: {
-    borderRadius: 6,
+  tickBar: {
+    height: 36,
+    width: 5,
+    borderRadius: 4,
   },
-  timeLabel: {
-    fontSize: 11,
-    color: '#999',
+  tickLabel: {
+    fontSize: 9,
+    color: '#BBB',
     marginBottom: 8,
-    fontFamily: 'System',
   },
-  centerTimeLabel: {
+  dangerTickLabel: {
+    color: '#E07B39',
+    fontWeight: '600',
+  },
+  nowContainer: {
+    position: 'absolute',
+    bottom: 60,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  nowLabelBg: {
+    alignItems: 'center',
+    backgroundColor: '#EDECE7',
+    paddingHorizontal: 14,
+    paddingVertical: 2,
+  },
+  nowTime: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#1A1A1A',
-    marginBottom: 4,
   },
-  dangerTimeLabel: {
-    color: '#D84315',
+  nowSubLabel: {
+    fontSize: 9,
+    color: '#979592',
     fontWeight: '600',
+    marginTop: 2,
+    marginBottom: 6,
   },
-  nowLabel: {
-    fontSize: 12,
-    color: '#666',
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  centerGlow: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#E07B39',
-    opacity: 0.2,
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -12 }, { translateY: -12 }],
-  },
-  dangerZoneHighlight: {
-    position: 'absolute',
-    height: 80,
-    backgroundColor: '#E07B39',
-    opacity: 0.1,
-    borderRadius: 12,
-    top: 80,
+  nowBar: {
+    width: 10,
+    height: 56,
+    backgroundColor: '#2B2B2B',
+    borderRadius: 5,
   },
   infoContainer: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 14,
     left: 0,
     right: 0,
     alignItems: 'center',
   },
   infoText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#E07B39',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   infoSubtext: {
-    fontSize: 12,
-    color: '#666',
+    fontSize: 11,
+    color: '#979592',
   },
 });

@@ -23,7 +23,7 @@ public class ExpoMetaGlassesModule: Module {
 
     AsyncFunction("configure") {
       do {
-        try Wearables.configure()
+        try await MainActor.run { try Wearables.configure() }
         print("[MetaGlasses] configure() succeeded")
       } catch {
         print("[MetaGlasses] configure() failed: \(error) — \(String(describing: error))")

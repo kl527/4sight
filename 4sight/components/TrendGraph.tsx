@@ -2,122 +2,105 @@ import React from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Path, Circle, Line, Text as SvgText } from 'react-native-svg';
 
-const { width } = Dimensions.get('window');
-const GRAPH_WIDTH = width - 60;
-const GRAPH_HEIGHT = 150;
-const PADDING = 20;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const GRAPH_WIDTH = SCREEN_WIDTH - 72;
+const GRAPH_HEIGHT = 200;
+const PAD_LEFT = 28;
+const PAD_RIGHT = 16;
+const PAD_TOP = 16;
+const PAD_BOTTOM = 28;
+
+const PLOT_W = GRAPH_WIDTH - PAD_LEFT - PAD_RIGHT;
+const PLOT_H = GRAPH_HEIGHT - PAD_TOP - PAD_BOTTOM;
 
 interface DataPoint {
-  timestamp: Date;
-  value: number; // 0-1 range
+  timestamp: number;
+  level: number;
 }
 
 interface TrendGraphProps {
-  label: string;
   data: DataPoint[];
-  color?: string;
 }
 
-export const TrendGraph: React.FC<TrendGraphProps> = ({ 
-  label, 
-  data, 
-  color = '#8AA97C' 
-}) => {
-  if (data.length === 0) return null;
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const h = d.getHours() % 12 || 12;
+  const m = d.getMinutes().toString().padStart(2, '0');
+  const period = d.getHours() >= 12 ? 'p' : 'a';
+  return `${h}:${m}${period}`;
+}
 
-  const maxValue = 1; // Since values are 0-1
-  const minValue = 0;
-  
-  const xScale = (GRAPH_WIDTH - 2 * PADDING) / (data.length - 1 || 1);
-  const yScale = (GRAPH_HEIGHT - 2 * PADDING) / (maxValue - minValue);
+export const TrendGraph: React.FC<TrendGraphProps> = ({ data }) => {
+  if (data.length < 2) {
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyTitle}>Building trend data...</Text>
+        <Text style={styles.emptySubtext}>
+          Keep the app running to see trends over time
+        </Text>
+      </View>
+    );
+  }
 
-  const getX = (index: number) => PADDING + index * xScale;
-  const getY = (value: number) => GRAPH_HEIGHT - PADDING - (value - minValue) * yScale;
+  const getX = (i: number) =>
+    PAD_LEFT + (i / Math.max(1, data.length - 1)) * PLOT_W;
+  const getY = (level: number) =>
+    PAD_TOP + ((5 - level) / 5) * PLOT_H;
 
-  // Create SVG path
-  const pathData = data
-    .map((point, index) => {
-      const x = getX(index);
-      const y = getY(point.value);
-      return index === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
-    })
+  // Sharp line path (no smoothing)
+  const pathD = data
+    .map((d, i) => `${i === 0 ? 'M' : 'L'} ${getX(i)} ${getY(d.level)}`)
     .join(' ');
-
-  // Format timestamp for x-axis labels
-  const formatTime = (date: Date) => {
-    const hours = date.getHours();
-    const displayHours = hours % 12 || 12;
-    const period = hours >= 12 ? 'PM' : 'AM';
-    return `${displayHours}${period}`;
-  };
-
-  // Y-axis labels (percentages)
-  const yAxisLabels = [0, 0.25, 0.5, 0.75, 1.0];
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>{label}</Text>
-      
       <Svg width={GRAPH_WIDTH} height={GRAPH_HEIGHT}>
-        {/* Y-axis grid lines */}
-        {yAxisLabels.map((level) => (
+        {/* Horizontal grid lines at each level */}
+        {[0, 1, 2, 3, 4, 5].map((level) => (
           <React.Fragment key={`grid-${level}`}>
             <Line
-              x1={PADDING}
+              x1={PAD_LEFT}
               y1={getY(level)}
-              x2={GRAPH_WIDTH - PADDING}
+              x2={GRAPH_WIDTH - PAD_RIGHT}
               y2={getY(level)}
               stroke="#DEDEDD"
-              strokeWidth="0.5"
-              strokeDasharray="2,2"
+              strokeWidth={0.6}
             />
             <SvgText
-              x={PADDING - 10}
+              x={PAD_LEFT - 8}
               y={getY(level) + 4}
-              fontSize="10"
-              fill="#999"
+              fontSize={10}
+              fill="#BBB"
               textAnchor="end"
             >
-              {(level * 100).toFixed(0)}%
+              {level}
             </SvgText>
           </React.Fragment>
         ))}
 
-        {/* Trend line */}
-        <Path
-          d={pathData}
-          stroke={color}
-          strokeWidth="2"
-          fill="none"
-        />
+        {/* Data line — sharp connections */}
+        <Path d={pathD} stroke="#8AA97C" strokeWidth={2.5} fill="none" />
 
-        {/* Data points */}
-        {data.map((point, index) => {
-          const x = getX(index);
-          const y = getY(point.value);
-          
-          return (
-            <React.Fragment key={`point-${index}`}>
-              <Circle
-                cx={x}
-                cy={y}
-                r="4"
-                fill={color}
-              />
-              {index % Math.max(1, Math.ceil(data.length / 4)) === 0 && (
-                <SvgText
-                  x={x}
-                  y={GRAPH_HEIGHT - 5}
-                  fontSize="10"
-                  fill="#666"
-                  textAnchor="middle"
-                >
-                  {formatTime(point.timestamp)}
-                </SvgText>
-              )}
-            </React.Fragment>
-          );
-        })}
+        {/* Data point circles + x-axis labels */}
+        {data.map((d, i) => (
+          <React.Fragment key={`pt-${i}`}>
+            <Circle
+              cx={getX(i)}
+              cy={getY(d.level)}
+              r={5}
+              fill="#8AA97C"
+            />
+            <SvgText
+              x={getX(i)}
+              y={GRAPH_HEIGHT - 6}
+              fontSize={9}
+              fill="#BBB"
+              textAnchor="middle"
+            >
+              {formatTime(d.timestamp)}
+            </SvgText>
+          </React.Fragment>
+        ))}
       </Svg>
     </View>
   );
@@ -125,15 +108,23 @@ export const TrendGraph: React.FC<TrendGraphProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    marginVertical: 15,
-    backgroundColor: '#F2F1ED',
-    borderRadius: 12,
-    padding: 15,
+    alignItems: 'center',
+    paddingHorizontal: 12,
   },
-  title: {
-    fontSize: 16,
+  emptyContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: 15,
     fontWeight: '600',
     color: '#2B2B2B',
-    marginBottom: 10,
+    marginBottom: 6,
+  },
+  emptySubtext: {
+    fontSize: 13,
+    color: '#979592',
+    textAlign: 'center',
   },
 });
