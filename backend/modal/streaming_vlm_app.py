@@ -395,10 +395,14 @@ class StreamingVLMSession:
 
     @modal.method()
     def close(self) -> None:
+        self.chunk_index = 0
         self.past_key_values = None
         self.prev_generated_ids = None
         self.recent_video_window_clips = []
         self.recent_pixel_values_videos = []
         self.full_conversation_history = []
+        self.streaming_args.video_grid_thw = None
+        self.streaming_args.second_per_grid_ts = None
+        self.streaming_args.input_ids = None
         if self.torch.cuda.is_available():
             self.torch.cuda.empty_cache()
