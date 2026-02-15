@@ -107,13 +107,85 @@ export default {
       return Response.json({ success: true, windowId, storedAt: Date.now() });
     }
 
-    // For WebSocket upgrades, forward the original request directly —
-    // new Request() strips the Upgrade header (forbidden in Fetch spec).
+    // WebSocket upgrades: relay between client and container,
+    // intercepting container→client messages to persist captions to D1.
     const isUpgrade =
       request.headers.get("Upgrade")?.toLowerCase() === "websocket";
 
     if (isUpgrade) {
-      return container.fetch(request);
+      const containerResp = await container.fetch(request);
+      const containerWs = containerResp.webSocket;
+      if (!containerWs) {
+        return new Response("container did not return a WebSocket", { status: 502 });
+      }
+      containerWs.accept();
+
+      const [clientWs, serverWs] = Object.values(new WebSocketPair());
+      serverWs.accept();
+
+      // Client → container: forward frames as-is
+      serverWs.addEventListener("message", (event) => {
+        try {
+          containerWs.send(event.data);
+        } catch {
+          serverWs.close(1011, "container send failed");
+        }
+      });
+
+      // Container → client: forward messages and intercept captions
+      containerWs.addEventListener("message", (event) => {
+        try {
+          const raw = typeof event.data === "string" ? event.data : null;
+          serverWs.send(event.data);
+
+          // Try to extract and persist caption from JSON ack
+          if (raw) {
+            try {
+              const ack = JSON.parse(raw) as Record<string, unknown>;
+              if (typeof ack.caption === "string" && ack.caption) {
+                const ts = Date.now();
+                const rand = Math.random().toString(36).slice(2, 10);
+                const windowId = `ws-cap-${ts}-${rand}`;
+                env.DB.prepare(
+                  `INSERT OR IGNORE INTO caption_windows (window_id, timestamp, chunk_start_s, chunk_end_s, caption, latency_ms, tokens_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)`
+                )
+                  .bind(
+                    windowId,
+                    ts,
+                    (ack.chunk_start_s as number) ?? null,
+                    (ack.chunk_end_s as number) ?? null,
+                    ack.caption,
+                    (ack.latency_ms as number) ?? null,
+                    (ack.tokens_generated as number) ?? null,
+                  )
+                  .run()
+                  .catch((err: unknown) => console.error("D1 caption insert failed:", err));
+              }
+            } catch {
+              // not JSON or missing caption — ignore
+            }
+          }
+        } catch {
+          containerWs.close(1011, "client send failed");
+        }
+      });
+
+      // Propagate close/error in both directions
+      serverWs.addEventListener("close", (event) => {
+        containerWs.close(event.code, event.reason);
+      });
+      serverWs.addEventListener("error", () => {
+        containerWs.close(1011, "client error");
+      });
+      containerWs.addEventListener("close", (event) => {
+        serverWs.close(event.code, event.reason);
+      });
+      containerWs.addEventListener("error", () => {
+        serverWs.close(1011, "container error");
+      });
+
+      return new Response(null, { status: 101, webSocket: clientWs });
     }
 
     // For regular HTTP: forward secrets to the container as headers

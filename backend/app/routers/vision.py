@@ -7,7 +7,6 @@ from collections import deque
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.services.caption_store import store_caption
 from app.services.vision_inference import vision_inference_client
 
 logger = logging.getLogger(__name__)
@@ -69,16 +68,6 @@ async def video_stream(ws: WebSocket):
                 )
                 if latest_inference_result.get("inference_error"):
                     inference_failures += 1
-                elif latest_inference_result.get("caption"):
-                    asyncio.create_task(
-                        store_caption(
-                            caption=str(latest_inference_result["caption"]),
-                            chunk_start_s=float(latest_inference_result.get("chunk_start_s", 0)),
-                            chunk_end_s=float(latest_inference_result.get("chunk_end_s", 0)),
-                            latency_ms=latest_inference_result.get("latency_ms"),  # type: ignore[arg-type]
-                            tokens_generated=latest_inference_result.get("tokens_generated"),  # type: ignore[arg-type]
-                        )
-                    )
                 pending_inference_task = None
 
             window_elapsed = now - chunk_window_start
