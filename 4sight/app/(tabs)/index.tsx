@@ -119,7 +119,7 @@ export default function HomeScreen() {
           <View style={styles.quickFixesContainer}>
             <Text style={styles.quickFixesTitle}>Quick fixes</Text>
             <View style={styles.quickFixesGrid}>
-              {QUICK_FIXES.map((fix) => (
+              {quickFixes.map((fix) => (
                 <View
                   key={fix.label}
                   style={[styles.quickFixCard, { width: CARD_WIDTH }]}
@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
   },
   quickFixesContainer: {
     paddingHorizontal: 24,
-    marginTop: 24,
+    marginTop: 40,
   },
   quickFixesTitle: {
     fontSize: 18,
