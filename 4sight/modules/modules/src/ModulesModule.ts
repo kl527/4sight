@@ -1,4 +1,4 @@
-import { NativeModule, requireNativeModule } from 'expo';
+import { NativeModule, requireOptionalNativeModule } from 'expo';
 
 import { ExpoMetaGlassesModuleEvents } from './Modules.types';
 
@@ -11,4 +11,24 @@ declare class ExpoMetaGlassesModule extends NativeModule<ExpoMetaGlassesModuleEv
   stopStreaming(): Promise<void>;
 }
 
-export default requireNativeModule<ExpoMetaGlassesModule>('ExpoMetaGlasses');
+const nativeModule = requireOptionalNativeModule<ExpoMetaGlassesModule>('ExpoMetaGlasses');
+
+const unavailable = () =>
+  Promise.reject(
+    new Error(
+      'ExpoMetaGlasses native module is unavailable. Rebuild your development client after native changes.'
+    )
+  );
+
+const fallbackModule = {
+  configure: unavailable,
+  startRegistration: unavailable,
+  stopRegistration: unavailable,
+  handleUrl: unavailable,
+  startStreaming: unavailable,
+  stopStreaming: unavailable,
+  addListener: () => ({ remove: () => {} }),
+  removeAllListeners: () => {},
+} as unknown as ExpoMetaGlassesModule;
+
+export default nativeModule ?? fallbackModule;

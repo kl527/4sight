@@ -9,7 +9,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.leed4219.x4sight",
+      "bundleIdentifier": "com.leed4219.4sight",
       "appleTeamId": "R8ZRDU733W",
       "deploymentTarget": "15.2",
       "associatedDomains": ["applinks:www.kyungsub.com"],
