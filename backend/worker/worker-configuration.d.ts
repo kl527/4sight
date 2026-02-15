@@ -1,6 +1,8 @@
 interface Env {
   BACKEND: DurableObjectNamespace;
+  DB: D1Database;
   MAGIC_WORD: string;
+  WORKER_BASE_URL: string;
   FORESIGHT_POKE_API_KEY: string;
   FORESIGHT_MODAL_TOKEN_ID: string;
   FORESIGHT_MODAL_TOKEN_SECRET: string;

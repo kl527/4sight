@@ -11,6 +11,8 @@ export class BackendContainer extends Container<Env> {
       MODAL_TOKEN_SECRET: env.FORESIGHT_MODAL_TOKEN_SECRET ?? "",
       MODAL_APP_NAME: env.FORESIGHT_MODAL_APP_NAME ?? "",
       MODAL_CLASS_NAME: env.FORESIGHT_MODAL_CLASS_NAME ?? "",
+      WORKER_BASE_URL: env.WORKER_BASE_URL ?? "",
+      MAGIC_WORD: env.MAGIC_WORD ?? "",
     };
   }
 
@@ -39,6 +41,7 @@ export default {
       BACKEND: DurableObjectNamespace<BackendContainer>;
       DB: D1Database;
       MAGIC_WORD: string;
+      WORKER_BASE_URL: string;
       FORESIGHT_POKE_API_KEY: string;
       FORESIGHT_MODAL_TOKEN_ID: string;
       FORESIGHT_MODAL_TOKEN_SECRET: string;
@@ -75,6 +78,29 @@ export default {
          VALUES (?, ?, ?, ?, ?, ?)`
       )
         .bind(windowId, timestamp, durationMs, featuresJson, riskJson, (qualityScore as number) ?? 0)
+        .run();
+
+      return Response.json({ success: true, windowId, storedAt: Date.now() });
+    }
+
+    // D1 caption upload — handled entirely in the Worker
+    if (url.pathname === "/captions/upload" && request.method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const { windowId, timestamp, chunkStartS, chunkEndS, caption, latencyMs, tokensGenerated } = body;
+
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO caption_windows (window_id, timestamp, chunk_start_s, chunk_end_s, caption, latency_ms, tokens_generated)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          windowId,
+          timestamp,
+          chunkStartS,
+          chunkEndS,
+          caption,
+          (latencyMs as number) ?? null,
+          (tokensGenerated as number) ?? null,
+        )
         .run();
 
       return Response.json({ success: true, windowId, storedAt: Date.now() });
