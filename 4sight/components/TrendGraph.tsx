@@ -31,7 +31,7 @@ function formatTime(ms: number): string {
 }
 
 export const TrendGraph: React.FC<TrendGraphProps> = ({ data }) => {
-  if (data.length < 2) {
+  if (data.length < 1) {
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyTitle}>Building trend data...</Text>

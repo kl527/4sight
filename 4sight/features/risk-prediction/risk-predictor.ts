@@ -2,14 +2,14 @@
  * On-device risk predictor.
  *
  * Runs the trained XGBoost ensemble locally using pure TypeScript.
- * Produces a prediction for every window, and maintains a running
- * average that gets progressively more robust with more data.
+ * Produces a prediction for every window, and maintains a rolling
+ * average over the last ROLLING_WINDOW predictions for responsiveness.
  *
  * Usage:
  *   const predictor = new RiskPredictor();
  *   const result = predictor.pushAndPredict(biosignalFeatures);
  *   // result.prediction  — this window's raw prediction
- *   // result.cumulative   — running average across all windows seen
+ *   // result.cumulative   — rolling average over recent windows
  *   // result.windowCount  — how many windows have been processed
  */
 
@@ -29,7 +29,7 @@ import modelJSON from '@/assets/models/risk_model.json';
 export interface PredictionResult {
   /** Raw prediction from this single window */
   prediction: RiskPrediction;
-  /** Running average across all windows — gets more robust over time */
+  /** Rolling average over recent windows */
   cumulative: RiskPrediction;
   /** Number of windows processed so far */
   windowCount: number;
@@ -64,17 +64,11 @@ const RISK_DIMENSIONS = ['stress', 'health', 'sleepFatigue', 'cognitiveFatigue',
 // ============================================================================
 
 export class RiskPredictor {
+  static readonly ROLLING_WINDOW = 10;
+
   private model: ModelConfig;
   private windowCount = 0;
-
-  // Running sums for cumulative averaging
-  private sumLevels = { stress: 0, health: 0, sleepFatigue: 0, cognitiveFatigue: 0, physicalExertion: 0 };
-  private sumProbs = { stress: [0, 0, 0, 0], health: [0, 0, 0, 0], sleepFatigue: [0, 0, 0, 0], cognitiveFatigue: [0, 0, 0, 0], physicalExertion: [0, 0, 0, 0] };
-  private sumSusceptibility = 0;
-  private sumTimeToRisk = 0;
-  private sumTimeLower = 0;
-  private sumTimeUpper = 0;
-  private sumConfidences: number[] = [];
+  private predictionBuffer: RiskPrediction[] = [];
 
   constructor() {
     this.model = modelJSON as unknown as ModelConfig;
@@ -85,32 +79,19 @@ export class RiskPredictor {
    *
    * Every call produces:
    * - prediction: the raw result from this single window
-   * - cumulative: running average across ALL windows seen so far
+   * - cumulative: rolling average over the last ROLLING_WINDOW predictions
    * - windowCount: total windows processed
-   *
-   * The cumulative prediction gets progressively more robust with each window.
-   * Works correctly for both real-time (1 window at a time) and batch catchup
-   * (10 windows downloaded at once on login).
    */
   pushAndPredict(features: BiosignalFeatures): PredictionResult {
     const prediction = this.predict(features, features.timestamp);
     this.windowCount++;
 
-    // Accumulate into running sums
-    for (const dim of RISK_DIMENSIONS) {
-      const risk = prediction.riskAssessment[dim];
-      this.sumLevels[dim] += risk.level;
-      for (let c = 0; c < risk.probabilities.length; c++) {
-        this.sumProbs[dim][c] += risk.probabilities[c];
-      }
+    // Push into rolling buffer, trim to window size
+    this.predictionBuffer.push(prediction);
+    if (this.predictionBuffer.length > RiskPredictor.ROLLING_WINDOW) {
+      this.predictionBuffer.shift();
     }
-    this.sumSusceptibility += prediction.overallSusceptibility;
-    this.sumTimeToRisk += prediction.timeToRiskMinutes;
-    this.sumTimeLower += prediction.timeToRiskRange.lower;
-    this.sumTimeUpper += prediction.timeToRiskRange.upper;
-    this.sumConfidences.push(prediction.modelConfidence.average);
 
-    // Build cumulative average
     const cumulative = this.buildCumulative(prediction.timestamp);
 
     return { prediction, cumulative, windowCount: this.windowCount };
@@ -119,15 +100,7 @@ export class RiskPredictor {
   /** Reset all accumulated state (e.g. new session). */
   reset(): void {
     this.windowCount = 0;
-    for (const dim of RISK_DIMENSIONS) {
-      this.sumLevels[dim] = 0;
-      this.sumProbs[dim] = [0, 0, 0, 0];
-    }
-    this.sumSusceptibility = 0;
-    this.sumTimeToRisk = 0;
-    this.sumTimeLower = 0;
-    this.sumTimeUpper = 0;
-    this.sumConfidences = [];
+    this.predictionBuffer = [];
   }
 
   /**
@@ -198,11 +171,18 @@ export class RiskPredictor {
   // ==========================================================================
 
   private buildCumulative(timestamp: number): RiskPrediction {
-    const n = this.windowCount;
+    const buf = this.predictionBuffer;
+    const n = buf.length;
     const riskLabels = this.model.config.riskLabels;
+    const nClasses = this.model.config.nClasses;
 
     const buildDimRisk = (dim: typeof RISK_DIMENSIONS[number]): DimensionRisk => {
-      const avgProbs = this.sumProbs[dim].map((s) => s / n);
+      const avgProbs = new Array(nClasses).fill(0);
+      for (const p of buf) {
+        const probs = p.riskAssessment[dim].probabilities;
+        for (let c = 0; c < nClasses; c++) avgProbs[c] += probs[c];
+      }
+      for (let c = 0; c < nClasses; c++) avgProbs[c] /= n;
       const level = argmax(avgProbs);
       return {
         level,
@@ -212,13 +192,21 @@ export class RiskPredictor {
       };
     };
 
-    const susceptibility = clamp(this.sumSusceptibility / n, 0, 1);
-    const timeToRisk = clamp(this.sumTimeToRisk / n, 3, 30);
-    const timeLower = clamp(this.sumTimeLower / n, 3, timeToRisk);
-    const timeUpper = clamp(this.sumTimeUpper / n, timeToRisk, 30);
+    let sumSusc = 0, sumTime = 0, sumLower = 0, sumUpper = 0, sumConf = 0;
+    let minConf = Infinity;
+    for (const p of buf) {
+      sumSusc += p.overallSusceptibility;
+      sumTime += p.timeToRiskMinutes;
+      sumLower += p.timeToRiskRange.lower;
+      sumUpper += p.timeToRiskRange.upper;
+      sumConf += p.modelConfidence.average;
+      if (p.modelConfidence.average < minConf) minConf = p.modelConfidence.average;
+    }
 
-    const avgConfidence = this.sumConfidences.reduce((a, b) => a + b, 0) / n;
-    const minConfidence = Math.min(...this.sumConfidences);
+    const susceptibility = clamp(sumSusc / n, 0, 1);
+    const timeToRisk = clamp(sumTime / n, 3, 30);
+    const timeLower = clamp(sumLower / n, 3, timeToRisk);
+    const timeUpper = clamp(sumUpper / n, timeToRisk, 30);
 
     return {
       timestamp,
@@ -233,7 +221,7 @@ export class RiskPredictor {
       timeToRiskMinutes: timeToRisk,
       timeToRiskRange: { lower: timeLower, upper: timeUpper, confidenceInterval: '80%' },
       alertLevel: this.getAlertLevel(susceptibility),
-      modelConfidence: { average: avgConfidence, min: minConfidence },
+      modelConfidence: { average: sumConf / n, min: minConf },
     };
   }
 

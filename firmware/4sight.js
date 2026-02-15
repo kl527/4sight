@@ -357,30 +357,39 @@ function stopWindow() {
 // Section 7: Display
 // ============================================
 function updateDisplay() {
-  g.clear();
-  g.setFont("6x8");
-  var y = 10;
+  g.clear(1);
 
-  if (state.recordingMode && state.recording) {
-    g.drawString("4sight REC", 10, y);
-    y += 15;
-    g.drawString("chunk " + state.chunkIndex, 10, y);
+  var isRec = state.recordingMode && state.recording;
+
+  // Big "TREE HACKS" — green when recording, black (default) otherwise
+  // NOTE: Bangle.js 2 has a reflective LCD with WHITE background.
+  // g.clear() clears to white, default fg is black. Never draw white on white.
+  g.setFontAlign(0, 0);
+  g.setFont("Vector", 40);
+
+  if (isRec) {
+    g.setColor(0, 1, 0); // green
   } else {
-    g.drawString("4sight idle", 10, y);
-  }
-  y += 15;
-
-  g.drawString("bat: " + E.getBattery() + "%", 10, y);
-  y += 12;
-
-  var qLen = getUploadQueue().length;
-  if (qLen > 0) {
-    g.drawString("queue: " + qLen, 10, y);
-    y += 12;
+    g.setColor(0, 0, 0); // black on white background
   }
 
-  if (bleTransferMode !== "idle") {
-    g.drawString("uploading...", 10, y);
+  g.drawString("TREE", 88, 63);
+  g.drawString("HACKS", 88, 113);
+
+  // Small status info at the bottom
+  g.setFont("6x8", 1);
+  g.setFontAlign(0, 1);
+  g.setColor(0, 0, 0);
+
+  if (isRec) {
+    g.setColor(0, 1, 0);
+    g.drawString("REC chunk " + state.chunkIndex + " | bat " + E.getBattery() + "%", 88, 172);
+  } else {
+    var statusParts = ["bat " + E.getBattery() + "%"];
+    var qLen = getUploadQueue().length;
+    if (qLen > 0) statusParts.push("q:" + qLen);
+    if (bleTransferMode !== "idle") statusParts.push("uploading");
+    g.drawString(statusParts.join(" | "), 88, 172);
   }
 }
 

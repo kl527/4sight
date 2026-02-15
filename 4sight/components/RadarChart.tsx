@@ -3,9 +3,9 @@ import { View, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Polygon, Line, Circle, Text as SvgText } from 'react-native-svg';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const SIZE = SCREEN_WIDTH - 80;
+const SIZE = SCREEN_WIDTH - 40;
 const CENTER = SIZE / 2;
-const RADIUS = SIZE / 2 - 44;
+const RADIUS = SIZE / 2 - 60;
 
 interface RiskScores {
   stress: number;
@@ -130,7 +130,7 @@ export const RadarChart: React.FC<RadarChartProps> = ({ scores }) => {
 
         {/* Category labels + score */}
         {LABELS.map((label, i) => {
-          const p = getVertex(i, RADIUS + 28);
+          const p = getVertex(i, RADIUS + 22);
           const anchor = ANCHORS[i];
           const yOff = i === 0 ? -10 : 4;
 

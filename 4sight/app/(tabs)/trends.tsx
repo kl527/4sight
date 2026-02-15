@@ -21,10 +21,16 @@ const CATEGORIES: { key: AssessmentKey; label: string }[] = [
   { key: 'physicalExertion', label: 'Exertion' },
 ];
 
-const MAX_HISTORY = 5;
+const MAX_HISTORY = 10;
+const MODEL_MAX_LEVEL = 3;
+const RADAR_MAX = 5;
 
 export default function TrendsScreen() {
-  const [predictions, setPredictions] = useState<RiskPrediction[]>([]);
+  const [predictions, setPredictions] = useState<RiskPrediction[]>(() => {
+    // Seed with existing prediction history so data is available immediately
+    const history = BluetoothManager.getPredictionHistory?.() ?? [];
+    return history.slice(-MAX_HISTORY).map((r) => r.cumulative);
+  });
   const [categoryIndex, setCategoryIndex] = useState(0);
 
   useEffect(() => {
@@ -42,19 +48,26 @@ export default function TrendsScreen() {
   const latest =
     predictions.length > 0 ? predictions[predictions.length - 1] : null;
 
+  // Compute probability-weighted expected value (continuous 0–3) then scale to 0–5
+  const expectedLevel = (probs: number[]) => {
+    let ev = 0;
+    for (let i = 0; i < probs.length; i++) ev += probs[i] * i;
+    return Math.round((ev / MODEL_MAX_LEVEL) * RADAR_MAX * 10) / 10;
+  };
+
   const radarScores = {
-    stress: latest?.riskAssessment.stress.level ?? 0,
-    health: latest?.riskAssessment.health.level ?? 0,
-    sleepFatigue: latest?.riskAssessment.sleepFatigue.level ?? 0,
-    cognitiveFatigue: latest?.riskAssessment.cognitiveFatigue.level ?? 0,
-    physicalExertion: latest?.riskAssessment.physicalExertion.level ?? 0,
+    stress: expectedLevel(latest?.riskAssessment.stress.probabilities ?? [1]),
+    health: expectedLevel(latest?.riskAssessment.health.probabilities ?? [1]),
+    sleepFatigue: expectedLevel(latest?.riskAssessment.sleepFatigue.probabilities ?? [1]),
+    cognitiveFatigue: expectedLevel(latest?.riskAssessment.cognitiveFatigue.probabilities ?? [1]),
+    physicalExertion: expectedLevel(latest?.riskAssessment.physicalExertion.probabilities ?? [1]),
   };
 
   const category = CATEGORIES[categoryIndex];
 
   const trendData = predictions.map((pred) => ({
     timestamp: pred.timestamp,
-    level: pred.riskAssessment[category.key].level,
+    level: expectedLevel(pred.riskAssessment[category.key].probabilities),
   }));
 
   const goLeft = () =>

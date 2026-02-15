@@ -1,5 +1,9 @@
 {
   "dependencies": {
     "react-native-svg": "^15.15.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
   }
 }

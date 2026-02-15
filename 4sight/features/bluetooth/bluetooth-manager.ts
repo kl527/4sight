@@ -250,6 +250,8 @@ class BluetoothManagerClass {
 
   // On-device risk prediction
   private riskPredictor = new RiskPredictor();
+  private predictionHistory: PredictionResult[] = [];
+  private static readonly MAX_PREDICTION_HISTORY = 50;
 
   // AppState (iOS background handling)
   private appStateSubscription: { remove: () => void } | null = null;
@@ -1472,6 +1474,10 @@ class BluetoothManagerClass {
       let prediction: PredictionResult | null = null;
       if (features) {
         prediction = this.riskPredictor.pushAndPredict(features);
+        this.predictionHistory.push(prediction);
+        if (this.predictionHistory.length > BluetoothManagerClass.MAX_PREDICTION_HISTORY) {
+          this.predictionHistory.shift();
+        }
         this.emit({ type: "riskPrediction", result: prediction });
         const p = prediction.prediction;
         const r = p.riskAssessment;
@@ -1488,8 +1494,9 @@ class BluetoothManagerClass {
         const c = prediction.cumulative;
         const cr = c.riskAssessment;
         this.log(
-          `risk cumulative: ${c.alertLevel} | susceptibility=${c.overallSusceptibility.toFixed(3)} | ` +
-          `stress=[${cr.stress.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
+          `risk cumulative (rolling ${this.predictionHistory.length}): ${c.alertLevel} | susceptibility=${c.overallSusceptibility.toFixed(3)} | ` +
+          `levels: stress=${cr.stress.level} health=${cr.health.level} sleep=${cr.sleepFatigue.level} cog=${cr.cognitiveFatigue.level} exert=${cr.physicalExertion.level} | ` +
+          `probs: stress=[${cr.stress.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
           `health=[${cr.health.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
           `sleep=[${cr.sleepFatigue.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
           `cog=[${cr.cognitiveFatigue.probabilities.map(v => v.toFixed(3)).join(',')}] ` +
@@ -1527,6 +1534,10 @@ class BluetoothManagerClass {
   setAutoSync(enabled: boolean): void {
     this.autoSyncEnabled = enabled;
     this.log(`autoSync ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  getPredictionHistory(): PredictionResult[] {
+    return [...this.predictionHistory];
   }
 
   // ============================================================================
