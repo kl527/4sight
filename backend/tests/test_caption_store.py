@@ -8,8 +8,8 @@ from app.services import caption_store
 
 async def test_store_caption_noops_when_env_unset(monkeypatch):
     """store_caption should silently return when WORKER_BASE_URL or MAGIC_WORD is empty."""
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "")
+    monkeypatch.delenv("WORKER_BASE_URL", raising=False)
+    monkeypatch.delenv("MAGIC_WORD", raising=False)
 
     # Should not raise or make any HTTP call
     await caption_store.store_caption(
@@ -21,8 +21,8 @@ async def test_store_caption_noops_when_env_unset(monkeypatch):
 
 async def test_store_caption_noops_when_only_url_set(monkeypatch):
     """store_caption should no-op if MAGIC_WORD is missing."""
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "https://worker.example.com")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "")
+    monkeypatch.setenv("WORKER_BASE_URL", "https://worker.example.com")
+    monkeypatch.delenv("MAGIC_WORD", raising=False)
 
     await caption_store.store_caption(
         caption="test caption",
@@ -43,8 +43,8 @@ async def test_store_caption_posts_correct_payload(monkeypatch):
 
     transport = httpx.MockTransport(mock_handler)
 
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "https://worker.example.com")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "secret123")
+    monkeypatch.setenv("WORKER_BASE_URL", "https://worker.example.com")
+    monkeypatch.setenv("MAGIC_WORD", "secret123")
 
     # Patch httpx.AsyncClient to use our mock transport
     original_init = httpx.AsyncClient.__init__
@@ -85,8 +85,8 @@ async def test_store_caption_swallows_http_errors(monkeypatch):
 
     transport = httpx.MockTransport(error_handler)
 
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "https://worker.example.com")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "secret123")
+    monkeypatch.setenv("WORKER_BASE_URL", "https://worker.example.com")
+    monkeypatch.setenv("MAGIC_WORD", "secret123")
 
     original_init = httpx.AsyncClient.__init__
 
@@ -112,8 +112,8 @@ async def test_store_caption_swallows_connection_errors(monkeypatch):
 
     transport = httpx.MockTransport(raise_handler)
 
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "https://worker.example.com")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "secret123")
+    monkeypatch.setenv("WORKER_BASE_URL", "https://worker.example.com")
+    monkeypatch.setenv("MAGIC_WORD", "secret123")
 
     original_init = httpx.AsyncClient.__init__
 
@@ -141,8 +141,8 @@ async def test_store_caption_optional_fields_default_none(monkeypatch):
 
     transport = httpx.MockTransport(mock_handler)
 
-    monkeypatch.setattr(caption_store, "WORKER_BASE_URL", "https://worker.example.com")
-    monkeypatch.setattr(caption_store, "MAGIC_WORD", "secret123")
+    monkeypatch.setenv("WORKER_BASE_URL", "https://worker.example.com")
+    monkeypatch.setenv("MAGIC_WORD", "secret123")
 
     original_init = httpx.AsyncClient.__init__
 

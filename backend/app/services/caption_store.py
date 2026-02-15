@@ -8,9 +8,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-WORKER_BASE_URL = os.getenv("WORKER_BASE_URL", "")
-MAGIC_WORD = os.getenv("MAGIC_WORD", "")
-
 
 async def store_caption(
     *,
@@ -25,8 +22,15 @@ async def store_caption(
     Generates a deterministic-ish window_id from the chunk timestamps so
     re-sends for the same chunk are idempotent (INSERT OR IGNORE).
     """
-    if not WORKER_BASE_URL or not MAGIC_WORD:
-        logger.debug("Caption store disabled (WORKER_BASE_URL or MAGIC_WORD not set)")
+    worker_base_url = os.getenv("WORKER_BASE_URL", "")
+    magic_word = os.getenv("MAGIC_WORD", "")
+
+    if not worker_base_url or not magic_word:
+        logger.warning(
+            "Caption store disabled — WORKER_BASE_URL=%r, MAGIC_WORD=%s",
+            worker_base_url,
+            "set" if magic_word else "EMPTY",
+        )
         return
 
     window_id = f"cap-{chunk_start_s:.3f}-{chunk_end_s:.3f}-{uuid.uuid4().hex[:8]}"
@@ -34,8 +38,8 @@ async def store_caption(
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
-                f"{WORKER_BASE_URL}/captions/upload",
-                headers={"x-magic-word": MAGIC_WORD},
+                f"{worker_base_url}/captions/upload",
+                headers={"x-magic-word": magic_word},
                 json={
                     "windowId": window_id,
                     "timestamp": chunk_start_s,
@@ -47,5 +51,6 @@ async def store_caption(
                 },
             )
             resp.raise_for_status()
+            logger.info("Stored caption window %s (status %d)", window_id, resp.status_code)
     except Exception:
         logger.exception("Failed to store caption window %s", window_id)
