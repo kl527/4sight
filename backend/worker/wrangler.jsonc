@@ -29,5 +29,12 @@
       "new_sqlite_classes": ["BackendContainer"],
       "tag": "v1"
     }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "foresight-biometrics",
+      "database_id": "3a3041ba-849c-428e-ae69-aece53e00f71"
+    }
   ]
 }

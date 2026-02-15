@@ -21,6 +21,7 @@ import { AppState, type AppStateStatus } from "react-native";
 import { extract } from "@/features/feature-extraction/feature-extractor";
 import { RiskPredictor, type PredictionResult } from "@/features/risk-prediction";
 import * as LocalStore from "@/features/storage/local-store";
+import { uploadBiometrics } from "@/features/api";
 
 // ============================================================================
 // BLE CONSTANTS
@@ -1457,14 +1458,28 @@ class BluetoothManagerClass {
         features,
       );
 
-      this.confirmUpload(result.windowId);
-      LocalStore.markUploadConfirmed(result.windowId);
-
-      // Run on-device risk prediction
+      // Run on-device risk prediction before upload so we can include it
+      let prediction: PredictionResult | null = null;
       if (features) {
-        const result = this.riskPredictor.pushAndPredict(features);
-        this.emit({ type: "riskPrediction", result });
-        this.log(`risk: ${result.prediction.alertLevel}, susceptibility=${result.prediction.overallSusceptibility.toFixed(3)}, windows=${result.windowCount}`);
+        prediction = this.riskPredictor.pushAndPredict(features);
+        this.emit({ type: "riskPrediction", result: prediction });
+        this.log(`risk: ${prediction.prediction.alertLevel}, susceptibility=${prediction.prediction.overallSusceptibility.toFixed(3)}, windows=${prediction.windowCount}`);
+      }
+
+      this.confirmUpload(result.windowId);
+
+      // Upload to D1 as fire-and-forget, only mark confirmed on success
+      if (features) {
+        uploadBiometrics(features, prediction?.prediction)
+          .then(() => {
+            LocalStore.markUploadConfirmed(result.windowId);
+            this.log(`autoSync: cloud upload confirmed ${result.windowId}`);
+          })
+          .catch((err) => {
+            this.log(`autoSync: cloud upload failed for ${result.windowId}: ${err}`);
+          });
+      } else {
+        LocalStore.markUploadConfirmed(result.windowId);
       }
 
       this.log(`autoSync: persisted ${result.windowId}, features=${features !== null}`);

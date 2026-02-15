@@ -37,6 +37,7 @@ export default {
     request: Request,
     env: {
       BACKEND: DurableObjectNamespace<BackendContainer>;
+      DB: D1Database;
       MAGIC_WORD: string;
       FORESIGHT_POKE_API_KEY: string;
       FORESIGHT_MODAL_TOKEN_ID: string;
@@ -59,6 +60,24 @@ export default {
       request.headers.get("x-magic-word") ?? url.searchParams.get("magic_word");
     if (!env.MAGIC_WORD || magic !== env.MAGIC_WORD) {
       return new Response("forbidden", { status: 403 });
+    }
+
+    // D1 biometrics upload — handled entirely in the Worker
+    if (url.pathname === "/biometrics/upload" && request.method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const { windowId, timestamp, durationMs, riskPrediction, qualityScore, ...rest } = body;
+
+      const featuresJson = JSON.stringify({ windowId, timestamp, durationMs, qualityScore, ...rest });
+      const riskJson = riskPrediction ? JSON.stringify(riskPrediction) : null;
+
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO biometric_windows (window_id, timestamp, duration_ms, features, risk, quality_score)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+        .bind(windowId, timestamp, durationMs, featuresJson, riskJson, (qualityScore as number) ?? 0)
+        .run();
+
+      return Response.json({ success: true, windowId, storedAt: Date.now() });
     }
 
     // For WebSocket upgrades, forward the original request directly —
