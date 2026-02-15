@@ -19,8 +19,10 @@
         "UISupportedExternalAccessoryProtocols": ["com.meta.ar.wearable"],
         "UIBackgroundModes": ["bluetooth-central", "bluetooth-peripheral", "external-accessory"],
         "MWDAT": {
-          "AppLinkURLScheme": "4sight",
-          "MetaAppID": "0"
+          "AppLinkURLScheme": "4sight://",
+          "MetaAppID": "901640146132243",
+          "ClientToken": "AR|901640146132243|d4ea397962070543613a92b684b52ce0",
+          "TeamID": "R8ZRDU733W"
         }
       }
     },

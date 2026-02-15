@@ -22,13 +22,26 @@ public class ExpoMetaGlassesModule: Module {
     )
 
     AsyncFunction("configure") {
-      try Wearables.configure()
+      do {
+        try Wearables.configure()
+        print("[MetaGlasses] configure() succeeded")
+      } catch {
+        print("[MetaGlasses] configure() failed: \(error) — \(String(describing: error))")
+        throw error
+      }
     }
 
     AsyncFunction("startRegistration") {
-      try await Wearables.shared.startRegistration()
-      self.observeRegistrationState()
-      self.observeDevices()
+      do {
+        print("[MetaGlasses] calling startRegistration()...")
+        try await Wearables.shared.startRegistration()
+        print("[MetaGlasses] startRegistration() succeeded")
+        self.observeRegistrationState()
+        self.observeDevices()
+      } catch {
+        print("[MetaGlasses] startRegistration() failed: \(error) — \(String(describing: error))")
+        throw error
+      }
     }
 
     AsyncFunction("stopRegistration") {
