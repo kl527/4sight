@@ -35,20 +35,7 @@ public class ExpoMetaGlassesModule: Module {
 
     AsyncFunction("configure") {
       do {
-        print("[MetaGlasses] configure() starting...")
-        print("[MetaGlasses]   Bundle ID: \(Bundle.main.bundleIdentifier ?? "nil")")
-        if let mwdat = Bundle.main.infoDictionary?["MWDAT"] as? [String: Any] {
-          print("[MetaGlasses]   MWDAT config: \(mwdat)")
-        } else {
-          print("[MetaGlasses]   WARNING: No MWDAT key found in Info.plist!")
-        }
-        if let urlTypes = Bundle.main.infoDictionary?["CFBundleURLTypes"] as? [[String: Any]] {
-          print("[MetaGlasses]   CFBundleURLTypes: \(urlTypes)")
-        }
         try await MainActor.run { try Wearables.configure() }
-        let canOpen = await MainActor.run { UIApplication.shared.canOpenURL(URL(string: "fb-viewapp://")!) }
-        print("[MetaGlasses] canOpenURL fb-viewapp: \(canOpen)")
-        self.isConfigured = true
         print("[MetaGlasses] configure() succeeded")
       } catch {
         self.isConfigured = false

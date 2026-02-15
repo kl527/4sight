@@ -1,385 +1,152 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Dimensions,
-} from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Fonts } from '@/constants/theme';
-import { useBluetooth } from '@/hooks/use-bluetooth';
 import { BluetoothManager } from '@/features/bluetooth/bluetooth-manager';
-import * as LocalStore from '@/features/storage/local-store';
-import type { WindowRecord } from '@/features/storage/local-store';
-import type { BiosignalFeatures } from '@/features/feature-extraction/types';
-import type { RiskPrediction, DimensionRisk } from '@/features/risk-prediction';
-import { decodePPGAsDouble } from '@/features/feature-extraction/binary-decoder';
-import { LineChart } from '@/components/charts/line-chart';
-import { RadarChart } from '@/components/charts/radar-chart';
+import type { RiskPrediction } from '@/features/risk-prediction';
+import { RadarChart } from '@/components/RadarChart';
+import { TrendGraph } from '@/components/TrendGraph';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const CARD_PADDING = 16;
-const CHART_WIDTH = SCREEN_WIDTH - 24 * 2 - CARD_PADDING * 2;
+type AssessmentKey =
+  | 'stress'
+  | 'health'
+  | 'sleepFatigue'
+  | 'cognitiveFatigue'
+  | 'physicalExertion';
 
-interface WindowCardData {
-  record: WindowRecord;
-  features: BiosignalFeatures | null;
-  ppgSamples: number[];
-}
+const CATEGORIES: { key: AssessmentKey; label: string }[] = [
+  { key: 'stress', label: 'Stress' },
+  { key: 'health', label: 'Health' },
+  { key: 'sleepFatigue', label: 'Sleep' },
+  { key: 'cognitiveFatigue', label: 'Cognitive' },
+  { key: 'physicalExertion', label: 'Exertion' },
+];
 
-function formatTime(timestamp: number): string {
-  const d = new Date(timestamp);
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function formatDate(timestamp: number): string {
-  const d = new Date(timestamp);
-  const now = new Date();
-  const isToday =
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear();
-  if (isToday) return 'Today';
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday =
-    d.getDate() === yesterday.getDate() &&
-    d.getMonth() === yesterday.getMonth() &&
-    d.getFullYear() === yesterday.getFullYear();
-  if (isYesterday) return 'Yesterday';
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-function qualityColor(score: number): string {
-  if (score >= 0.6) return '#8AA97C';
-  if (score >= 0.3) return '#D4A843';
-  return '#C97070';
-}
-
-function WindowCard({ data }: { data: WindowCardData }) {
-  const { record, features, ppgSamples } = data;
-  const timestamp = record.downloadedAt || parseInt(record.windowId, 10) || 0;
-  const hr = features?.hrMean;
-  const quality = features?.qualityScore ?? 0;
-
-  return (
-    <View style={cardStyles.card}>
-      {/* Header row */}
-      <View style={cardStyles.headerRow}>
-        <View style={cardStyles.hrContainer}>
-          {hr != null ? (
-            <>
-              <Text style={cardStyles.hrValue}>{Math.round(hr)}</Text>
-              <Text style={cardStyles.hrUnit}> bpm</Text>
-            </>
-          ) : (
-            <Text style={cardStyles.hrUnit}>No HR data</Text>
-          )}
-        </View>
-        <View style={cardStyles.timeContainer}>
-          <Text style={cardStyles.timeText}>{formatTime(timestamp)}</Text>
-          <Text style={cardStyles.dateText}>{formatDate(timestamp)}</Text>
-        </View>
-      </View>
-
-      {/* PPG Chart */}
-      {ppgSamples.length > 0 && (
-        <View style={cardStyles.chartContainer}>
-          <LineChart
-            data={ppgSamples}
-            width={CHART_WIDTH}
-            height={80}
-            color="#C97070"
-            strokeWidth={1}
-            showGrid={false}
-          />
-        </View>
-      )}
-
-      {/* Footer row */}
-      <View style={cardStyles.footerRow}>
-        <View style={[cardStyles.qualityBadge, { backgroundColor: qualityColor(quality) + '20' }]}>
-          <Text style={[cardStyles.qualityText, { color: qualityColor(quality) }]}>
-            {Math.round(quality * 100)}% quality
-          </Text>
-        </View>
-        <Text style={cardStyles.windowId}>
-          {features?.durationMs ? `${Math.round(features.durationMs / 1000)}s window` : `#${record.windowId.slice(-6)}`}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-/** Convert a DimensionRisk to a 0-1 continuous score using its probability
- *  distribution (weighted average of class indices).  Much smoother than
- *  the discrete level which is just argmax → 0,1,2,3. */
-function dimensionScore(d: DimensionRisk): number {
-  const probs = d.probabilities;
-  if (!probs || probs.length === 0) return d.level / 3;
-  let score = 0;
-  for (let i = 0; i < probs.length; i++) score += i * probs[i];
-  return score / (probs.length - 1); // normalize to 0-1
-}
-
-function riskToRadarValues(prediction: RiskPrediction): number[] {
-  const r = prediction.riskAssessment;
-  return [
-    dimensionScore(r.stress),
-    dimensionScore(r.health),
-    dimensionScore(r.sleepFatigue),
-    dimensionScore(r.cognitiveFatigue),
-    dimensionScore(r.physicalExertion),
-  ];
-}
+const MAX_HISTORY = 5;
 
 export default function TrendsScreen() {
-  const { isAutoSyncing } = useBluetooth();
-  const [cards, setCards] = useState<WindowCardData[]>([]);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [riskData, setRiskData] = useState<{ values: number[]; windowCount: number; alertLevel: string } | null>(null);
+  const [predictions, setPredictions] = useState<RiskPrediction[]>([]);
+  const [categoryIndex, setCategoryIndex] = useState(0);
 
-  // Listen for risk prediction events from the bluetooth manager
   useEffect(() => {
     const unsubscribe = BluetoothManager.addEventListener((event) => {
       if (event.type === 'riskPrediction') {
-        const { cumulative, windowCount } = event.result;
-        setRiskData({
-          values: riskToRadarValues(cumulative),
-          windowCount,
-          alertLevel: cumulative.alertLevel,
-        });
+        setPredictions((prev) => [
+          ...prev.slice(-(MAX_HISTORY - 1)),
+          event.result.cumulative,
+        ]);
       }
     });
     return unsubscribe;
   }, []);
 
-  const loadWindows = useCallback(() => {
-    try {
-      const manifest = LocalStore.getManifest();
-      const sorted = [...manifest].sort((a, b) => b.downloadedAt - a.downloadedAt);
+  const latest =
+    predictions.length > 0 ? predictions[predictions.length - 1] : null;
 
-      const loaded: WindowCardData[] = sorted.map((record) => {
-        const features = record.hasFeatures
-          ? LocalStore.getWindowFeatures(record.windowId)
-          : null;
+  const radarScores = {
+    stress: latest?.riskAssessment.stress.level ?? 0,
+    health: latest?.riskAssessment.health.level ?? 0,
+    sleepFatigue: latest?.riskAssessment.sleepFatigue.level ?? 0,
+    cognitiveFatigue: latest?.riskAssessment.cognitiveFatigue.level ?? 0,
+    physicalExertion: latest?.riskAssessment.physicalExertion.level ?? 0,
+  };
 
-        let ppgSamples: number[] = [];
-        try {
-          const ppgBin = LocalStore.getWindowPPGBinary(record.windowId);
-          if (ppgBin && ppgBin.length > 0) {
-            const decoded = decodePPGAsDouble(ppgBin);
-            ppgSamples = decoded.samples;
-          }
-        } catch {
-          // Failed to decode PPG, leave empty
-        }
+  const category = CATEGORIES[categoryIndex];
 
-        return { record, features, ppgSamples };
-      });
+  const trendData = predictions.map((pred) => ({
+    timestamp: pred.timestamp,
+    level: pred.riskAssessment[category.key].level,
+  }));
 
-      setCards(loaded);
-    } catch {
-      // Storage not initialized yet
-    }
-  }, []);
-
-  // Load on mount and when auto-sync completes
-  useEffect(() => {
-    loadWindows();
-  }, [loadWindows, refreshKey]);
-
-  // Refresh when auto-sync state changes (from syncing -> not syncing = sync completed)
-  const prevSyncing = React.useRef(isAutoSyncing);
-  useEffect(() => {
-    if (prevSyncing.current && !isAutoSyncing) {
-      setRefreshKey((k) => k + 1);
-    }
-    prevSyncing.current = isAutoSyncing;
-  }, [isAutoSyncing]);
-
-  const groupedCards = useMemo(() => {
-    const groups: { label: string; cards: WindowCardData[] }[] = [];
-    let currentLabel = '';
-    for (const card of cards) {
-      const ts = card.record.downloadedAt || parseInt(card.record.windowId, 10) || 0;
-      const label = formatDate(ts);
-      if (label !== currentLabel) {
-        currentLabel = label;
-        groups.push({ label, cards: [card] });
-      } else {
-        groups[groups.length - 1].cards.push(card);
-      }
-    }
-    return groups;
-  }, [cards]);
+  const goLeft = () =>
+    setCategoryIndex(
+      (i) => (i - 1 + CATEGORIES.length) % CATEGORIES.length,
+    );
+  const goRight = () =>
+    setCategoryIndex((i) => (i + 1) % CATEGORIES.length);
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={styles.title}>Trends</Text>
-      {isAutoSyncing && (
-        <Text style={styles.syncingText}>Syncing new windows...</Text>
-      )}
+    <View style={styles.screen}>
+      {/* Top half — Radar Chart */}
+      <View style={styles.radarSection}>
+        <Text style={styles.radarTitle}>Risk Assessment</Text>
+        <RadarChart scores={radarScores} />
+      </View>
 
-      <RadarChart
-        labels={['Stress', 'Health', 'Sleep', 'Fatigue', 'Exertion']}
-        values={riskData?.values ?? [0, 0, 0, 0, 0]}
-      />
-      {riskData && (
-        <Text style={styles.radarSubtext}>
-          {riskData.alertLevel} · {riskData.windowCount} window{riskData.windowCount !== 1 ? 's' : ''} analyzed
-        </Text>
-      )}
-      {!riskData && (
-        <Text style={styles.radarSubtext}>Waiting for biometric data...</Text>
-      )}
+      {/* Divider */}
+      <View style={styles.divider} />
 
-      {cards.length === 0 && !isAutoSyncing && (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>No data yet</Text>
-          <Text style={styles.emptySubtitle}>
-            Connect your Bangle.js and start recording to see PPG trends here.
-          </Text>
+      {/* Bottom half — Navigable Trend Graph */}
+      <View style={styles.trendSection}>
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            onPress={goLeft}
+            style={styles.chevronBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Text style={styles.chevron}>{'\u2039'}</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.navTitle}>{category.label} Trends</Text>
+
+          <TouchableOpacity
+            onPress={goRight}
+            style={styles.chevronBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Text style={styles.chevron}>{'\u203A'}</Text>
+          </TouchableOpacity>
         </View>
-      )}
 
-      {groupedCards.map((group) => (
-        <View key={group.label}>
-          <Text style={styles.groupLabel}>{group.label}</Text>
-          {group.cards.map((card) => (
-            <WindowCard key={card.record.windowId} data={card} />
-          ))}
-        </View>
-      ))}
-    </ScrollView>
+        <TrendGraph data={trendData} />
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
     backgroundColor: '#EDECE7',
+    paddingTop: 60,
   },
-  contentContainer: {
-    paddingTop: 80,
-    paddingHorizontal: 24,
-    paddingBottom: 140,
-  },
-  title: {
-    fontSize: 24,
-    fontFamily: Fonts.serif,
-    color: '#2B2B2B',
-    marginBottom: 8,
-  },
-  radarSubtext: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-    color: '#979592',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  syncingText: {
-    fontSize: 13,
-    fontFamily: Fonts.sans,
-    color: '#8AA97C',
-    marginBottom: 16,
-  },
-  groupLabel: {
-    fontSize: 14,
-    fontFamily: Fonts.sansMedium,
-    color: '#979592',
-    marginTop: 20,
-    marginBottom: 10,
-    marginLeft: 4,
-  },
-  emptyState: {
-    marginTop: 60,
+  radarSection: {
+    flex: 1,
     alignItems: 'center',
-    paddingHorizontal: 32,
+    justifyContent: 'center',
   },
-  emptyTitle: {
-    fontSize: 18,
+  radarTitle: {
+    fontSize: 20,
     fontFamily: Fonts.serifMedium,
     color: '#2B2B2B',
-    marginBottom: 8,
+    marginBottom: 4,
   },
-  emptySubtitle: {
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-    color: '#979592',
-    textAlign: 'center',
-    lineHeight: 20,
+  divider: {
+    height: 1,
+    backgroundColor: '#DEDEDD',
   },
-});
-
-const cardStyles = StyleSheet.create({
-  card: {
-    backgroundColor: '#F2F1ED',
-    borderRadius: 12,
-    borderWidth: 0.4,
-    borderColor: '#D7D7D7',
-    padding: CARD_PADDING,
-    marginBottom: 12,
+  trendSection: {
+    flex: 1,
+    justifyContent: 'flex-start',
   },
-  headerRow: {
+  navRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 8,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 8,
   },
-  hrContainer: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
+  navTitle: {
+    fontSize: 16,
+    fontFamily: Fonts.serifMedium,
+    color: '#2B2B2B',
   },
-  hrValue: {
+  chevronBtn: {
+    padding: 4,
+  },
+  chevron: {
     fontSize: 28,
-    fontFamily: Fonts.serifBold,
     color: '#2B2B2B',
-  },
-  hrUnit: {
-    fontSize: 13,
-    fontFamily: Fonts.sans,
-    color: '#979592',
-  },
-  timeContainer: {
-    alignItems: 'flex-end',
-  },
-  timeText: {
-    fontSize: 14,
-    fontFamily: Fonts.sansMedium,
-    color: '#2B2B2B',
-  },
-  dateText: {
-    fontSize: 11,
-    fontFamily: Fonts.sans,
-    color: '#979592',
-  },
-  chartContainer: {
-    marginVertical: 4,
-    alignItems: 'center',
-  },
-  footerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  qualityBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  qualityText: {
-    fontSize: 11,
-    fontFamily: Fonts.sansMedium,
-  },
-  windowId: {
-    fontSize: 11,
-    fontFamily: Fonts.sans,
-    color: '#979592',
+    fontWeight: '600',
   },
 });
