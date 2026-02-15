@@ -262,6 +262,18 @@ class StreamingVLMSession:
             text_sliding_window=self.text_sliding_window,
         )
 
+        # Trim video_grid_thw to match remaining clips after KV cache pruning.
+        # process_past_kv prunes old video tokens from prev_generated_ids but
+        # doesn't touch streaming_args, so video_grid_thw can outgrow input_ids.
+        n_kept = len(self.recent_video_window_clips)
+        if (
+            self.streaming_args.video_grid_thw is not None
+            and self.streaming_args.video_grid_thw.shape[0] > n_kept
+        ):
+            self.streaming_args.video_grid_thw = self.streaming_args.video_grid_thw[-n_kept:]
+            if self.streaming_args.second_per_grid_ts is not None:
+                self.streaming_args.second_per_grid_ts = self.streaming_args.second_per_grid_ts[-n_kept:]
+
         self.recent_video_window_clips.append(current_video_chunk)
         time_prompt = f"Time={start_ts_s:.1f}-{end_ts_s:.1f}s"
 
