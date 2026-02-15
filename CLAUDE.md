@@ -6,6 +6,12 @@ if you're debugging prod issues, use `uv run modal` and `source ~/.env.local && 
 
 the way we test the websocket endpoint in prod is with `uv run --with websockets ./backend/scripts/replay_video_to_vision_ws.py --url https://foresight-backend.jun-871.workers.dev --video /home/ben/Downloads/vid.mp4 --magic-word <ask_the_user>`
 
+to test the D1 biometric upload endpoint in prod:
+1. apply migrations: `source ~/.env.local && cd backend/worker && npx wrangler d1 migrations apply foresight-biometrics --remote`
+2. POST to `/biometrics/upload` with `x-magic-word` header and a JSON body containing `windowId`, `timestamp`, `durationMs`, `qualityScore`, and any feature fields
+3. verify rows: `source ~/.env.local && cd backend/worker && npx wrangler d1 execute foresight-biometrics --remote --command "SELECT * FROM biometric_windows ORDER BY id DESC LIMIT 5"`
+4. re-send the same `windowId` to confirm idempotency (`INSERT OR IGNORE` should silently skip duplicates)
+
 # 4sight — hackathon project
 
 AI health agent that uses real-time biometrics to scare people into being healthy. Think Duolingo's guilt-tripping but for your lifespan. Target demo: biohackers & Bryan Johnson types.
