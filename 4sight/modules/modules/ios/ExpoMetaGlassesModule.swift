@@ -9,6 +9,18 @@ public class ExpoMetaGlassesModule: Module {
   private var videoFrameListenerToken: AnyListenerToken?
   private var frameCount: Int = 0
   private var isStreaming = false
+  private var isConfigured = false
+
+  private func logError(_ label: String, _ error: Error) {
+    let nsError = error as NSError
+    print("[MetaGlasses] \(label) ERROR: \(error.localizedDescription)")
+    print("[MetaGlasses]   domain=\(nsError.domain) code=\(nsError.code)")
+    print("[MetaGlasses]   userInfo=\(nsError.userInfo)")
+    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+      print("[MetaGlasses]   underlyingError: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
+      print("[MetaGlasses]   underlyingUserInfo=\(underlying.userInfo)")
+    }
+  }
 
   public func definition() -> ModuleDefinition {
     Name("ExpoMetaGlasses")
@@ -23,34 +35,70 @@ public class ExpoMetaGlassesModule: Module {
 
     AsyncFunction("configure") {
       do {
+        print("[MetaGlasses] configure() starting...")
+        print("[MetaGlasses]   Bundle ID: \(Bundle.main.bundleIdentifier ?? "nil")")
+        if let mwdat = Bundle.main.infoDictionary?["MWDAT"] as? [String: Any] {
+          print("[MetaGlasses]   MWDAT config: \(mwdat)")
+        } else {
+          print("[MetaGlasses]   WARNING: No MWDAT key found in Info.plist!")
+        }
+        if let urlTypes = Bundle.main.infoDictionary?["CFBundleURLTypes"] as? [[String: Any]] {
+          print("[MetaGlasses]   CFBundleURLTypes: \(urlTypes)")
+        }
         try Wearables.configure()
+        self.isConfigured = true
         print("[MetaGlasses] configure() succeeded")
       } catch {
-        print("[MetaGlasses] configure() failed: \(error) — \(String(describing: error))")
+        self.isConfigured = false
+        self.logError("configure()", error)
         throw error
       }
     }
 
     AsyncFunction("startRegistration") {
+      print("[MetaGlasses] startRegistration() called — isConfigured=\(self.isConfigured)")
+      guard self.isConfigured else {
+        print("[MetaGlasses] startRegistration() ABORTED: SDK not configured yet!")
+        throw NSError(
+          domain: "ExpoMetaGlasses",
+          code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Meta Wearables SDK not configured. Call configure() first."]
+        )
+      }
       do {
-        print("[MetaGlasses] calling startRegistration()...")
+        let currentState = Wearables.shared.registrationState
+        print("[MetaGlasses] startRegistration() — current registrationState=\(currentState)")
+        print("[MetaGlasses] startRegistration() — current devices=\(Wearables.shared.devices)")
+        print("[MetaGlasses] calling Wearables.shared.startRegistration()...")
         try await Wearables.shared.startRegistration()
-        print("[MetaGlasses] startRegistration() succeeded")
+        print("[MetaGlasses] startRegistration() succeeded — new state=\(Wearables.shared.registrationState)")
         self.observeRegistrationState()
         self.observeDevices()
       } catch {
-        print("[MetaGlasses] startRegistration() failed: \(error) — \(String(describing: error))")
+        self.logError("startRegistration()", error)
         throw error
       }
     }
 
     AsyncFunction("stopRegistration") {
+      print("[MetaGlasses] stopRegistration() called")
       try await Wearables.shared.startUnregistration()
     }
 
     AsyncFunction("handleUrl") { (urlString: String) in
-      guard let url = URL(string: urlString) else { return }
-      _ = try await Wearables.shared.handleUrl(url)
+      print("[MetaGlasses] handleUrl() called with: \(urlString)")
+      guard let url = URL(string: urlString) else {
+        print("[MetaGlasses] handleUrl() — invalid URL, ignoring")
+        return
+      }
+      do {
+        let result = try await Wearables.shared.handleUrl(url)
+        print("[MetaGlasses] handleUrl() result: \(result)")
+        print("[MetaGlasses] handleUrl() — registrationState after: \(Wearables.shared.registrationState)")
+      } catch {
+        self.logError("handleUrl()", error)
+        throw error
+      }
     }
 
     AsyncFunction("startStreaming") { (deviceId: String, wsUrl: String) in

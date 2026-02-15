@@ -48,24 +48,34 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
+    console.log('[_layout] Starting Meta Glasses SDK configure...');
     const configurePromise = ExpoMetaGlasses.configure();
-    configurePromise.catch(console.error);
+    configurePromise
+      .then(() => console.log('[_layout] Meta Glasses SDK configure succeeded'))
+      .catch((err) => console.error('[_layout] Meta Glasses SDK configure FAILED:', err));
 
     const handleIncomingUrl = (url: string) => {
+      console.log('[_layout] handleIncomingUrl called with:', url);
       configurePromise
-        .then(() => ExpoMetaGlasses.handleUrl(url))
-        .catch(console.error);
+        .then(() => {
+          console.log('[_layout] Passing URL to handleUrl:', url);
+          return ExpoMetaGlasses.handleUrl(url);
+        })
+        .then(() => console.log('[_layout] handleUrl completed successfully'))
+        .catch((err) => console.error('[_layout] handleUrl FAILED:', err));
     };
 
     Linking.getInitialURL()
       .then((url) => {
+        console.log('[_layout] getInitialURL:', url);
         if (url) {
           handleIncomingUrl(url);
         }
       })
-      .catch(console.error);
+      .catch((err) => console.error('[_layout] getInitialURL FAILED:', err));
 
     const subscription = Linking.addEventListener('url', ({ url }) => {
+      console.log('[_layout] Linking event received:', url);
       handleIncomingUrl(url);
     });
 

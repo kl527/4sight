@@ -42,7 +42,6 @@
     },
     "plugins": [
       "./plugins/withUseFrameworks",
-      "./plugins/withMetaWearables",
       "expo-router",
       [
         "expo-splash-screen",
