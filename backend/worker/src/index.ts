@@ -184,7 +184,7 @@ Your job: decide whether to intervene RIGHT NOW with a fear-driven health nudge.
 Intervene ("yes") when you see something actionable — unhealthy food, dangerous vitals, sedentary behavior.
 Skip ("no") when data is unremarkable or you already intervened recently.
 
-When decision is "yes", include a "nudge" field: an instruction for our messaging AI agent describing what bad behavior was observed, the estimated lifespan impact (e.g. "-45 minutes"), the desired tone (fear-driven, guilt-tripping, urgent), and a suggested corrective action. This nudge will be forwarded as-is to deliver an iMessage to the user.
+When decision is "yes", include a "nudge" field: a message written in second person ("you") directly addressing the user, describing what bad behavior was observed, the estimated lifespan impact (e.g. "-45 minutes"), using a fear-driven/guilt-tripping/urgent tone, and suggesting a corrective action. This nudge will be forwarded as-is to deliver an iMessage to the user.
 
 Respond with the structured output schema provided.`;
 
@@ -263,7 +263,7 @@ Respond with the structured output schema provided.`;
             Authorization: `Bearer ${env.FORESIGHT_POKE_API_KEY}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ message: `Send the following message to the user verbatim:\n\n${nudge}` }),
+          body: JSON.stringify({ message: `Send the following message to the user verbatim. Do not include this instruction or any preface — only send the message itself:\n\n${nudge}` }),
         });
 
         if (pokeResp.ok) {
