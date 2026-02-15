@@ -61,11 +61,11 @@ Two D1 tables store time-windowed data for downstream LLM batch processing:
 
 Both use `window_id` as an idempotency key (`INSERT OR IGNORE` on `UNIQUE(window_id)`).
 
-- `interventions` — intervention decisions from the 1-minute cron loop (migration `0003`). Stores `decision` (yes/no), `reasoning`, input row IDs (`biometric_ids`/`caption_ids` as JSON arrays), `model`, and token usage.
+- `interventions` — intervention decisions from the 1-minute cron loop (migration `0003`, extended by `0004`). Stores `decision` (yes/no), `reasoning`, input row IDs (`biometric_ids`/`caption_ids` as JSON arrays), `model`, token usage, and Poke delivery tracking (`poke_message`, `poke_sent_at` — both nullable, populated only on successful Poke send for "yes" decisions).
 
 ### cron trigger
 
-A Worker cron fires every minute (`* * * * *`). It queries the last minute of `biometric_windows` and `caption_windows`, calls OpenAI `gpt-4o-mini` for a binary intervention decision, and inserts the result into `interventions`. Skips the OpenAI call if no recent data exists.
+A Worker cron fires every minute (`* * * * *`). It queries the last minute of `biometric_windows` and `caption_windows`, calls OpenAI `gpt-4o-mini` for an intervention decision, and inserts the result into `interventions`. Skips the OpenAI call if no recent data exists. When the decision is "yes", the LLM also returns a `nudge` instruction which is POSTed to Poke's inbound-sms webhook (`FORESIGHT_POKE_API_KEY` Bearer auth) to deliver a fear-driven iMessage. Poke failures are caught and logged but never block the DB insert.
 
 ### testing the caption upload endpoint in prod
 

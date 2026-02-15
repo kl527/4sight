@@ -142,6 +142,7 @@ export default {
     env: {
       DB: D1Database;
       OPENAI_API_KEY: string;
+      FORESIGHT_POKE_API_KEY: string;
     },
     ctx: ExecutionContext,
   ): Promise<void> {
@@ -152,6 +153,7 @@ export default {
 async function runInterventionCheck(env: {
   DB: D1Database;
   OPENAI_API_KEY: string;
+  FORESIGHT_POKE_API_KEY: string;
 }): Promise<void> {
   try {
     const biometrics = await env.DB.prepare(
@@ -182,7 +184,11 @@ Your job: decide whether to intervene RIGHT NOW with a fear-driven health nudge.
 Intervene ("yes") when you see something actionable — unhealthy food, dangerous vitals, sedentary behavior.
 Skip ("no") when data is unremarkable or you already intervened recently.
 
-Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}`;
+When decision is "yes", include a "nudge" field: an instruction for our messaging AI agent describing what bad behavior was observed, the estimated lifespan impact (e.g. "-45 minutes"), the desired tone (fear-driven, guilt-tripping, urgent), and a suggested corrective action. This nudge will be forwarded as-is to deliver an iMessage to the user.
+
+Respond with JSON only:
+- If yes: {"decision": "yes", "reasoning": "one sentence", "nudge": "instruction for messaging agent"}
+- If no: {"decision": "no", "reasoning": "one sentence"}`;
 
     const userMessage = JSON.stringify({
       biometrics: biometrics.results,
@@ -198,7 +204,7 @@ Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}
       body: JSON.stringify({
         model: "gpt-4o-mini",
         temperature: 0,
-        max_tokens: 100,
+        max_tokens: 300,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
@@ -224,11 +230,13 @@ Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}
 
     let decision: string;
     let reasoning: string | null = null;
+    let nudge: string | null = null;
 
     try {
-      const parsed = JSON.parse(raw) as { decision: string; reasoning?: string };
+      const parsed = JSON.parse(raw) as { decision: string; reasoning?: string; nudge?: string };
       decision = parsed.decision === "yes" ? "yes" : "no";
       reasoning = parsed.reasoning ?? null;
+      nudge = parsed.nudge ?? null;
     } catch {
       // Fallback: substring match
       decision = raw.toLowerCase().includes('"yes"') ? "yes" : "no";
@@ -238,9 +246,39 @@ Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}
     const biometricIds = JSON.stringify(biometrics.results.map((r) => r.id));
     const captionIds = JSON.stringify(captions.results.map((r) => r.id));
 
+    // Send nudge to Poke when intervening
+    let pokeMessage: string | null = null;
+    let pokeSentAt: string | null = null;
+
+    if (decision === "yes" && nudge && env.FORESIGHT_POKE_API_KEY) {
+      try {
+        const pokeResp = await fetch("https://poke.com/api/v1/inbound-sms/webhook", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.FORESIGHT_POKE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ message: nudge }),
+        });
+
+        if (pokeResp.ok) {
+          pokeMessage = nudge;
+          pokeSentAt = new Date().toISOString();
+          console.log("intervention cron: Poke nudge sent");
+        } else {
+          console.error(
+            `intervention cron: Poke API error ${pokeResp.status}`,
+            await pokeResp.text()
+          );
+        }
+      } catch (pokeErr) {
+        console.error("intervention cron: Poke send failed", pokeErr);
+      }
+    }
+
     await env.DB.prepare(
-      `INSERT INTO interventions (decision, reasoning, biometric_ids, caption_ids, model, prompt_tokens, completion_tokens)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO interventions (decision, reasoning, biometric_ids, caption_ids, model, prompt_tokens, completion_tokens, poke_message, poke_sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         decision,
@@ -250,6 +288,8 @@ Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}
         "gpt-4o-mini",
         usage?.prompt_tokens ?? null,
         usage?.completion_tokens ?? null,
+        pokeMessage,
+        pokeSentAt,
       )
       .run();
 
