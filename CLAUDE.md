@@ -32,6 +32,10 @@ User puts on Ray-Bans → agent scans their food → lifespan ticker updates on 
 - **CV**: Meta Ray-Bans for food recognition (https://wearables.developer.meta.com/docs/develop)
 - **Clinical data**: OpenEvidence for mortality rates & clinical credibility (https://www.openevidence.com/)
 
+## expo builds
+
+set `FORESIGHT_MAGIC_WORD` env var before running expo prebuild/build — it's injected via `4sight/app.config.ts` and must not be committed to source.
+
 ## repo structure
 
 - `backend/` — FastAPI app + worker (Python/uv)

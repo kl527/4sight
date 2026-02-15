@@ -55,8 +55,7 @@
       "react-native-ble-plx"
     ],
     "extra": {
-      "apiBaseUrl": "https://foresight-backend.jun-871.workers.dev",
-      "magicWord": "CHANGE_ME"
+      "apiBaseUrl": "https://foresight-backend.jun-871.workers.dev"
     },
     "experiments": {
       "typedRoutes": true,
