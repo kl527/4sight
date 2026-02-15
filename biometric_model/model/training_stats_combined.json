@@ -1,0 +1,140 @@
+{
+  "training_time_minutes": 0.3684654394785563,
+  "data_sources": {
+    "base_features": true,
+    "augmented_data": false
+  },
+  "n_samples_total": 36800,
+  "n_train": 31040,
+  "n_val": 0,
+  "n_test": 5760,
+  "n_features": 36,
+  "metrics": {
+    "stress": {
+      "accuracy": 0.6185567010309279,
+      "distribution": [
+        17644,
+        8445,
+        3681,
+        1270
+      ]
+    },
+    "health": {
+      "accuracy": 0.5839776632302406,
+      "distribution": [
+        17065,
+        9944,
+        3238,
+        793
+      ]
+    },
+    "sleep/fatigue": {
+      "accuracy": 0.4684278350515464,
+      "distribution": [
+        12659,
+        11087,
+        4749,
+        2545
+      ]
+    },
+    "cognitive": {
+      "accuracy": 0.5642182130584192,
+      "distribution": [
+        14978,
+        9573,
+        4848,
+        1641
+      ]
+    },
+    "physical": {
+      "accuracy": 0.7609536082474226,
+      "distribution": [
+        22363,
+        5028,
+        3329,
+        320
+      ]
+    },
+    "susceptibility": {
+      "r2": 0.5170270105469863,
+      "mae": 0.12027880168033758
+    },
+    "time_to_risk": {
+      "r2": 0.4147807387472985,
+      "mae": 3.2425979290261533
+    }
+  },
+  "baseline_stats": {
+    "hr_mean": 86.61073389768924,
+    "hr_std": 48.237001670863194,
+    "sdnn_median": 183.13999484082825,
+    "rmssd_median": 252.2312576322866
+  },
+  "test_performance": {
+    "susceptibility_mean": 0.18162162319058553,
+    "susceptibility_std": 0.13455421668547682,
+    "avg_latency_ms": 16.75605206853814
+  },
+  "feature_importance_top15": [
+    [
+      "movementIntensity",
+      0.06022607535123825
+    ],
+    [
+      "rmssd",
+      0.057525575160980225
+    ],
+    [
+      "hrv_power",
+      0.05187835171818733
+    ],
+    [
+      "recovery_score",
+      0.04950924590229988
+    ],
+    [
+      "pnn50",
+      0.048634786158800125
+    ],
+    [
+      "meanRR",
+      0.04346805065870285
+    ],
+    [
+      "accelMagnitudeStd",
+      0.040544431656599045
+    ],
+    [
+      "hrMean",
+      0.03755085915327072
+    ],
+    [
+      "sdnn",
+      0.03670303523540497
+    ],
+    [
+      "hr_per_movement",
+      0.02999381348490715
+    ],
+    [
+      "sdsd",
+      0.02783096209168434
+    ],
+    [
+      "poincareArea",
+      0.02566429413855076
+    ],
+    [
+      "movement_var",
+      0.025642240419983864
+    ],
+    [
+      "sd1",
+      0.0243839081376791
+    ],
+    [
+      "hrMin",
+      0.02258639968931675
+    ]
+  ]
+}
