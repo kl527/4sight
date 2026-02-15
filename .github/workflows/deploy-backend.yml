@@ -52,12 +52,19 @@ jobs:
         run: |
           MODAL_APP_NAME="${FORESIGHT_MODAL_APP_NAME:-foresight-gemma3-vlm}"
           MODAL_CLASS_NAME="${FORESIGHT_MODAL_CLASS_NAME_OVERRIDE:-Gemma3VLMSession}"
+          # Derive worker URL from account subdomain (deterministic, no manual config)
+          SUBDOMAIN=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | jq -r '.result.subdomain')
+          WORKER_URL="https://foresight-backend.${SUBDOMAIN}.workers.dev"
           echo "$MAGIC_WORD" | pnpm exec wrangler secret put MAGIC_WORD --name foresight-backend
           echo "$FORESIGHT_POKE_API_KEY" | pnpm exec wrangler secret put FORESIGHT_POKE_API_KEY --name foresight-backend
           echo "$FORESIGHT_MODAL_TOKEN_ID" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_ID --name foresight-backend
           echo "$FORESIGHT_MODAL_TOKEN_SECRET" | pnpm exec wrangler secret put FORESIGHT_MODAL_TOKEN_SECRET --name foresight-backend
           echo "$MODAL_APP_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_APP_NAME --name foresight-backend
           echo "$MODAL_CLASS_NAME" | pnpm exec wrangler secret put FORESIGHT_MODAL_CLASS_NAME --name foresight-backend
+          echo "$WORKER_URL" | pnpm exec wrangler secret put WORKER_BASE_URL --name foresight-backend
+          echo "$OPENAI_API_KEY" | pnpm exec wrangler secret put OPENAI_API_KEY --name foresight-backend
         env:
           MAGIC_WORD: ${{ vars.MAGIC_WORD }}
           FORESIGHT_POKE_API_KEY: ${{ secrets.FORESIGHT_POKE_API_KEY }}
@@ -65,6 +72,7 @@ jobs:
           FORESIGHT_MODAL_TOKEN_SECRET: ${{ secrets.FORESIGHT_MODAL_TOKEN_SECRET }}
           FORESIGHT_MODAL_APP_NAME: ${{ vars.FORESIGHT_MODAL_APP_NAME }}
           FORESIGHT_MODAL_CLASS_NAME_OVERRIDE: ${{ vars.FORESIGHT_MODAL_CLASS_NAME_OVERRIDE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 

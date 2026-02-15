@@ -139,3 +139,12 @@ def test_websocket_ack_remains_responsive_while_inference_runs(sync_client, monk
         ack3 = ws.receive_json()
         assert ack3["frame"] == 3
         assert ack3["caption"] == "walking outside"
+
+
+def test_websocket_fps_logging_at_frame_30(sync_client):
+    """Send 30 frames to cover the FPS logging branch (frame_count % 30 == 0)."""
+    with sync_client.websocket_connect("/vision/stream") as ws:
+        for i in range(30):
+            ws.send_bytes(b"x")
+            ack = ws.receive_json()
+            assert ack["frame"] == i + 1

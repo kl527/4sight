@@ -1,27 +1,28 @@
 {
   "expo": {
-    "name": "4sight",
-    "slug": "4sight",
+    "name": "foursight",
+    "slug": "foursight",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "4sight",
+    "scheme": "foursight",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.leed4219.x4sight",
+      "bundleIdentifier": "com.leed4219.foursight",
       "appleTeamId": "R8ZRDU733W",
-      "deploymentTarget": "15.2",
+      "deploymentTarget": "16.0",
+      "associatedDomains": ["applinks:www.kyungsub.com"],
       "infoPlist": {
-        "NSBluetoothAlwaysUsageDescription": "4sight uses Bluetooth to connect to your Bangle.js watch and Ray-Ban Meta glasses.",
-        "CFBundleURLTypes": [{ "CFBundleURLSchemes": ["4sight"] }],
+        "NSBluetoothAlwaysUsageDescription": "foursight uses Bluetooth to connect to your Bangle.js watch and Ray-Ban Meta glasses.",
+        "CFBundleURLTypes": [{ "CFBundleTypeRole": "Editor", "CFBundleURLName": "$(PRODUCT_BUNDLE_IDENTIFIER)", "CFBundleURLSchemes": ["foursight"] }],
         "LSApplicationQueriesSchemes": ["fb-viewapp"],
         "UISupportedExternalAccessoryProtocols": ["com.meta.ar.wearable"],
         "UIBackgroundModes": ["bluetooth-central", "bluetooth-peripheral", "external-accessory"],
         "MWDAT": {
-          "AppLinkURLScheme": "4sight://",
-          "MetaAppID": "901640146132243",
-          "ClientToken": "AR|901640146132243|d4ea397962070543613a92b684b52ce0",
+          "AppLinkURLScheme": "foursight://",
+          "MetaAppID": "0",
+          "ClientToken": "",
           "TeamID": "R8ZRDU733W"
         }
       }
@@ -29,7 +30,7 @@
     "android": {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.leed4219.x4sight"
+      "package": "com.leed4219.foursight"
     },
     "androidNavigationBar": {
       "backgroundColor": "#EDECE7",

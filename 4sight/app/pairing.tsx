@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   ActivityIndicator,
   StyleSheet,
   Animated,
+  ScrollView,
+  AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
@@ -41,6 +43,14 @@ export default function PairingScreen() {
   const glasses = useGlasses();
   const router = useRouter();
 
+  const [glassesError, setGlassesError] = useState<string | null>(null);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const addDebugLine = (line: string) => {
+    const ts = new Date().toLocaleTimeString();
+    console.log(`[pairing] ${line}`);
+    setDebugLog((prev) => [`[${ts}] ${line}`, ...prev].slice(0, 30));
+  };
+
   const isConnected = bt.connectionState === 'connected';
   const isConnecting = bt.connectionState === 'connecting';
   const isScanning = bt.isScanning;
@@ -51,6 +61,29 @@ export default function PairingScreen() {
   const isGlassesStreaming = glasses.streamingStatus === 'streaming';
   const hasGlassesDevices = glasses.devices.length > 0;
   const glassesBusy = isGlassesRegistering || isGlassesStarting;
+
+  // Log app state changes (background → foreground after Meta AI)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      addDebugLine(`AppState → ${nextState} | regState=${glasses.registrationState}`);
+    });
+    return () => sub.remove();
+  }, [glasses.registrationState]);
+
+  // Log state transitions for debugging
+  useEffect(() => {
+    addDebugLine(`registrationState → ${glasses.registrationState}`);
+  }, [glasses.registrationState]);
+
+  useEffect(() => {
+    addDebugLine(`streamingStatus → ${glasses.streamingStatus}`);
+  }, [glasses.streamingStatus]);
+
+  useEffect(() => {
+    if (glasses.devices.length > 0) {
+      addDebugLine(`devices → ${JSON.stringify(glasses.devices)}`);
+    }
+  }, [glasses.devices]);
 
   const cardBgAnim = useRef(new Animated.Value(0)).current;
   const glassesCardBgAnim = useRef(new Animated.Value(0)).current;
@@ -144,7 +177,16 @@ export default function PairingScreen() {
   };
 
   const handleGlassesPress = () => {
-    glasses.register().catch(console.error);
+    setGlassesError(null);
+    addDebugLine('User tapped Connect Glasses — calling register()...');
+    glasses.register()
+      .then(() => addDebugLine('register() promise resolved'))
+      .catch((err) => {
+        const msg = err?.message || String(err);
+        addDebugLine(`register() FAILED: ${msg}`);
+        setGlassesError(msg);
+        console.error('[pairing] register() error:', err);
+      });
   };
 
   const glassesCardText = (() => {
@@ -175,6 +217,12 @@ export default function PairingScreen() {
       {glasses.streamingStatus === 'error' && (
         <View style={[styles.banner, { backgroundColor: '#dc3545' }]}>
           <Text style={styles.bannerText}>Glasses streaming failed. Try connecting again.</Text>
+        </View>
+      )}
+
+      {glassesError && (
+        <View style={[styles.banner, { backgroundColor: '#dc3545' }]}>
+          <Text style={styles.bannerText} numberOfLines={3}>Glasses error: {glassesError}</Text>
         </View>
       )}
 
@@ -255,6 +303,18 @@ export default function PairingScreen() {
             </TouchableOpacity>
           )}
       </View>
+
+      {/* Debug log panel */}
+      {debugLog.length > 0 && (
+        <View style={styles.debugPanel}>
+          <Text style={styles.debugTitle}>Debug Log</Text>
+          <ScrollView style={styles.debugScroll}>
+            {debugLog.map((line, i) => (
+              <Text key={i} style={styles.debugLine}>{line}</Text>
+            ))}
+          </ScrollView>
+        </View>
+      )}
     </View>
   );
 }
@@ -312,5 +372,27 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1B1B1B',
+  },
+  debugPanel: {
+    backgroundColor: '#1a1a2e',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    maxHeight: 160,
+  },
+  debugTitle: {
+    color: '#00ff88',
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 4,
+    fontFamily: 'Courier',
+  },
+  debugScroll: {
+    flexGrow: 0,
+  },
+  debugLine: {
+    color: '#ccc',
+    fontSize: 10,
+    fontFamily: 'Courier',
+    lineHeight: 14,
   },
 });
