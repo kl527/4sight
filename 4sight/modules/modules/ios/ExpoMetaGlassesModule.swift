@@ -45,8 +45,8 @@ public class ExpoMetaGlassesModule: Module {
         if let urlTypes = Bundle.main.infoDictionary?["CFBundleURLTypes"] as? [[String: Any]] {
           print("[MetaGlasses]   CFBundleURLTypes: \(urlTypes)")
         }
-        try Wearables.configure()
-        let canOpen = await UIApplication.shared.canOpenURL(URL(string: "fb-viewapp://")!)
+        try await MainActor.run { try Wearables.configure() }
+        let canOpen = await MainActor.run { UIApplication.shared.canOpenURL(URL(string: "fb-viewapp://")!) }
         print("[MetaGlasses] canOpenURL fb-viewapp: \(canOpen)")
         self.isConfigured = true
         print("[MetaGlasses] configure() succeeded")
