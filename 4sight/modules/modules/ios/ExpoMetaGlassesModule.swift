@@ -46,6 +46,8 @@ public class ExpoMetaGlassesModule: Module {
           print("[MetaGlasses]   CFBundleURLTypes: \(urlTypes)")
         }
         try Wearables.configure()
+        let canOpen = await UIApplication.shared.canOpenURL(URL(string: "fb-viewapp://")!)
+        print("[MetaGlasses] canOpenURL fb-viewapp: \(canOpen)")
         self.isConfigured = true
         print("[MetaGlasses] configure() succeeded")
       } catch {
@@ -75,6 +77,12 @@ public class ExpoMetaGlassesModule: Module {
         self.observeRegistrationState()
         self.observeDevices()
       } catch {
+        let nsErr = error as NSError
+        print("[MetaGlasses] startRegistration error domain: \(nsErr.domain)")
+        print("[MetaGlasses] startRegistration error code: \(nsErr.code)")
+        print("[MetaGlasses] startRegistration error type: \(type(of: error))")
+        print("[MetaGlasses] startRegistration error dump:")
+        dump(error)
         self.logError("startRegistration()", error)
         throw error
       }

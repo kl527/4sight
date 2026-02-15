@@ -21,8 +21,8 @@
         "UIBackgroundModes": ["bluetooth-central", "bluetooth-peripheral", "external-accessory"],
         "MWDAT": {
           "AppLinkURLScheme": "foursight://",
-          "MetaAppID": "901640146132243",
-          "ClientToken": "AR|901640146132243|d4ea397962070543613a92b684b52ce0",
+          "MetaAppID": "0",
+          "ClientToken": "",
           "TeamID": "R8ZRDU733W"
         }
       }
