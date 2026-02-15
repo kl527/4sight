@@ -17,7 +17,7 @@ HF_SECRET_NAME = os.getenv("GEMMA3_HF_SECRET_NAME", "").strip()
 
 image = (
     modal.Image.from_registry("python:3.11-slim-bookworm")
-    .apt_install("ffmpeg")
+    .apt_install("ffmpeg", "gcc", "libc6-dev")
     .pip_install(
         "accelerate==1.8.1",
         "numpy==2.2.6",
@@ -80,7 +80,6 @@ class Gemma3VLMSession:
 
         set_seed(42)
         torch.set_float32_matmul_precision("high")
-        torch._dynamo.config.suppress_errors = True
 
         self.cv2 = cv2
         self.np = np
