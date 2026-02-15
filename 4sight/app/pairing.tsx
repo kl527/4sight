@@ -11,11 +11,16 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { useRouter } from 'expo-router';
 import { useBluetooth } from '@/hooks/use-bluetooth';
+import { useGlasses } from '@/hooks/useGlasses';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 const CONNECT_GREEN = '#B7D7A8';
 const CONNECT_GREEN_DARK = '#8EC278';
+const CONNECT_BLUE = '#A8C8D7';
+const CONNECT_BLUE_DARK = '#78A8C2';
+const GLASSES_STREAM_WS_URL = 'wss://foresight-backend.jun-871.workers.dev/vision/stream';
+const MAGIC_WORD = process.env.EXPO_PUBLIC_MAGIC_WORD;
 
 function WatchIcon({ size = 48, color = '#1B1B1B' }: { size?: number; color?: string }) {
   const scale = size / 45;
@@ -33,6 +38,7 @@ export default function PairingScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const colors = Colors[colorScheme];
   const bt = useBluetooth();
+  const glasses = useGlasses();
   const router = useRouter();
 
   const isConnected = bt.connectionState === 'connected';
@@ -40,8 +46,14 @@ export default function PairingScreen() {
   const isScanning = bt.isScanning;
   const bluetoothOff = bt.bluetoothState !== 'poweredOn';
   const hasDevices = bt.discoveredDevices.length > 0;
+  const isGlassesRegistering = glasses.registrationState === 'registering';
+  const isGlassesStarting = glasses.streamingStatus === 'starting';
+  const isGlassesStreaming = glasses.streamingStatus === 'streaming';
+  const hasGlassesDevices = glasses.devices.length > 0;
+  const glassesBusy = isGlassesRegistering || isGlassesStarting;
 
   const cardBgAnim = useRef(new Animated.Value(0)).current;
+  const glassesCardBgAnim = useRef(new Animated.Value(0)).current;
 
   // Auto-connect to first discovered device
   useEffect(() => {
@@ -49,6 +61,32 @@ export default function PairingScreen() {
       bt.connect(bt.discoveredDevices[0].id);
     }
   }, [hasDevices, isScanning, isConnecting, isConnected]);
+
+  // Auto-start glasses stream once registration succeeds and a device appears.
+  const startedGlassesStream = useRef(false);
+  useEffect(() => {
+    if (glasses.registrationState !== 'registered') return;
+    if (!hasGlassesDevices) return;
+    if (startedGlassesStream.current) return;
+    if (glasses.streamingStatus === 'starting' || glasses.streamingStatus === 'streaming') return;
+    if (!MAGIC_WORD) {
+      console.error('Missing EXPO_PUBLIC_MAGIC_WORD in .env.local');
+      return;
+    }
+
+    startedGlassesStream.current = true;
+    const wsUrl = `${GLASSES_STREAM_WS_URL}?magic_word=${encodeURIComponent(MAGIC_WORD)}`;
+    glasses.startStream(glasses.devices[0].id, wsUrl).catch((error) => {
+      startedGlassesStream.current = false;
+      console.error(error);
+    });
+  }, [glasses.registrationState, glasses.streamingStatus, hasGlassesDevices, glasses.devices, glasses.startStream]);
+
+  useEffect(() => {
+    if (glasses.streamingStatus === 'stopped' || glasses.streamingStatus === 'error') {
+      startedGlassesStream.current = false;
+    }
+  }, [glasses.streamingStatus]);
 
   // Start recording (if not already) and navigate to tabs when connected
   const hasNavigated = useRef(false);
@@ -63,6 +101,12 @@ export default function PairingScreen() {
     router.replace('/(tabs)');
   }, [isConnected, bt.deviceStatus]);
 
+  useEffect(() => {
+    if (glasses.streamingStatus !== 'streaming' || hasNavigated.current) return;
+    hasNavigated.current = true;
+    router.replace('/(tabs)');
+  }, [glasses.streamingStatus, router]);
+
   // Animate card background
   useEffect(() => {
     const target = isConnecting ? 2 : isScanning ? 1 : 0;
@@ -73,12 +117,26 @@ export default function PairingScreen() {
     }).start();
   }, [isScanning, isConnecting]);
 
+  useEffect(() => {
+    const target = glassesBusy ? 2 : isGlassesStreaming || glasses.registrationState === 'registered' ? 1 : 0;
+    Animated.timing(glassesCardBgAnim, {
+      toValue: target,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  }, [glassesBusy, isGlassesStreaming, glasses.registrationState, glassesCardBgAnim]);
+
   const cardBg = cardBgAnim.interpolate({
     inputRange: [0, 1, 2],
     outputRange: ['#F2F1ED', CONNECT_GREEN, CONNECT_GREEN_DARK],
   });
 
-  const handlePress = () => {
+  const glassesCardBg = glassesCardBgAnim.interpolate({
+    inputRange: [0, 1, 2],
+    outputRange: ['#F2F1ED', CONNECT_BLUE, CONNECT_BLUE_DARK],
+  });
+
+  const handleWatchPress = () => {
     if (bluetoothOff) return;
     if (isScanning) {
       bt.stopScanning();
@@ -86,6 +144,18 @@ export default function PairingScreen() {
       bt.startScanning();
     }
   };
+
+  const handleGlassesPress = () => {
+    glasses.register().catch(console.error);
+  };
+
+  const glassesCardText = (() => {
+    if (isGlassesStarting) return 'Starting stream...';
+    if (isGlassesRegistering) return 'Registering...';
+    if (isGlassesStreaming) return 'Streaming...';
+    if (glasses.registrationState === 'registered' && !hasGlassesDevices) return 'Looking for glasses...';
+    return 'Connect Glasses';
+  })();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -104,39 +174,79 @@ export default function PairingScreen() {
         </View>
       )}
 
+      {glasses.streamingStatus === 'error' && (
+        <View style={[styles.banner, { backgroundColor: '#dc3545' }]}>
+          <Text style={styles.bannerText}>Glasses streaming failed. Try connecting again.</Text>
+        </View>
+      )}
+
       <View style={styles.scanContainer}>
-        <TouchableOpacity
-          onPress={handlePress}
-          disabled={isConnecting || bluetoothOff}
-          activeOpacity={0.8}
-        >
-          <Animated.View
-            style={[
-              styles.connectCard,
-              { backgroundColor: cardBg },
-              (isConnecting || bluetoothOff) && styles.buttonDisabled,
-            ]}
+        <View style={styles.cardStack}>
+          <TouchableOpacity
+            onPress={handleWatchPress}
+            disabled={isConnecting || bluetoothOff}
+            activeOpacity={0.8}
           >
-            {isScanning || isConnecting ? (
-              <ActivityIndicator
-                color="#1B1B1B"
-                size="large"
-                style={{ marginBottom: 16 }}
-              />
-            ) : (
-              <View style={{ marginBottom: 16 }}>
-                <WatchIcon size={48} color="#1B1B1B" />
-              </View>
-            )}
-            <Text style={styles.connectCardText}>
-              {isConnecting
-                ? 'Connecting...'
-                : isScanning
-                  ? 'Searching...'
-                  : 'Connect Device'}
-            </Text>
-          </Animated.View>
-        </TouchableOpacity>
+            <Animated.View
+              style={[
+                styles.connectCard,
+                { backgroundColor: cardBg },
+                (isConnecting || bluetoothOff) && styles.buttonDisabled,
+              ]}
+            >
+              {isScanning || isConnecting ? (
+                <ActivityIndicator
+                  color="#1B1B1B"
+                  size="large"
+                  style={{ marginBottom: 16 }}
+                />
+              ) : (
+                <View style={{ marginBottom: 16 }}>
+                  <WatchIcon size={48} color="#1B1B1B" />
+                </View>
+              )}
+              <Text style={styles.connectCardText}>
+                {isConnecting
+                  ? 'Connecting...'
+                  : isScanning
+                    ? 'Searching...'
+                    : 'Connect Watch'}
+              </Text>
+            </Animated.View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleGlassesPress}
+            disabled={glassesBusy}
+            activeOpacity={0.8}
+          >
+            <Animated.View
+              style={[
+                styles.connectCard,
+                { backgroundColor: glassesCardBg },
+                glassesBusy && styles.buttonDisabled,
+              ]}
+            >
+              {glassesBusy ? (
+                <ActivityIndicator
+                  color="#1B1B1B"
+                  size="large"
+                  style={{ marginBottom: 16 }}
+                />
+              ) : (
+                <View style={{ marginBottom: 16 }}>
+                  <Ionicons name="glasses-outline" size={48} color="#1B1B1B" />
+                </View>
+              )}
+              <Text style={styles.connectCardText}>
+                {glassesCardText}
+              </Text>
+              <Text style={styles.connectCardSubText}>
+                Registration: {glasses.registrationState}
+              </Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -155,6 +265,9 @@ const styles = StyleSheet.create({
   },
   bannerText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   scanContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  cardStack: {
+    gap: 18,
+  },
   connectCard: {
     width: 311,
     height: 186,
@@ -170,6 +283,12 @@ const styles = StyleSheet.create({
   connectCardText: {
     fontSize: 24,
     fontWeight: '700',
+    color: '#1B1B1B',
+  },
+  connectCardSubText: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '600',
     color: '#1B1B1B',
   },
   buttonDisabled: { opacity: 0.5 },

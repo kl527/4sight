@@ -2,6 +2,7 @@ import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Linking from 'expo-linking';
 import { useFonts } from 'expo-font';
 import {
   Lato_400Regular,
@@ -17,6 +18,7 @@ import 'react-native-reanimated';
 import { useEffect } from 'react';
 
 import { Colors } from '@/constants/theme';
+import ExpoMetaGlasses from '@/modules/modules';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -44,6 +46,33 @@ export default function RootLayout() {
     Merriweather_500Medium,
     Merriweather_700Bold,
   });
+
+  useEffect(() => {
+    const configurePromise = ExpoMetaGlasses.configure();
+    configurePromise.catch(console.error);
+
+    const handleIncomingUrl = (url: string) => {
+      configurePromise
+        .then(() => ExpoMetaGlasses.handleUrl(url))
+        .catch(console.error);
+    };
+
+    Linking.getInitialURL()
+      .then((url) => {
+        if (url) {
+          handleIncomingUrl(url);
+        }
+      })
+      .catch(console.error);
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      handleIncomingUrl(url);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (fontsLoaded) {

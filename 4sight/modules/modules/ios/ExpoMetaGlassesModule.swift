@@ -1,10 +1,12 @@
 import ExpoModulesCore
 import MWDATCore
 import MWDATCamera
+import UIKit
 
 public class ExpoMetaGlassesModule: Module {
   private var webSocket: URLSessionWebSocketTask?
   private var streamSession: StreamSession?
+  private var videoFrameListenerToken: AnyListenerToken?
   private var frameCount: Int = 0
   private var isStreaming = false
 
@@ -50,13 +52,26 @@ public class ExpoMetaGlassesModule: Module {
           return
         }
 
-        // Create stream session
-        let config = StreamSessionConfig(resolution: .r720p, codec: .h264)
-        let session = StreamSession(device: device, config: config)
+        // TODO: If this project is pinned to an older DAT SDK, migrate to this 0.4+ raw-frame API.
+        let config = StreamSessionConfig(
+          videoCodec: VideoCodec.raw,
+          resolution: StreamingResolution.low,
+          frameRate: 24
+        )
+        let deviceSelector = SpecificDeviceSelector(device: device)
+        let session = StreamSession(streamSessionConfig: config, deviceSelector: deviceSelector)
         self.streamSession = session
 
+        let cameraStatus = try await Wearables.shared.checkPermissionStatus(.camera)
+        if cameraStatus != .granted {
+          let _ = try await Wearables.shared.requestPermission(.camera)
+        }
+
         // Open WebSocket
-        let url = URL(string: wsUrl)!
+        guard let url = URL(string: wsUrl) else {
+          self.sendEvent("onStreamingStatusChanged", ["status": "error"])
+          return
+        }
         let wsSession = URLSession(configuration: .default)
         let ws = wsSession.webSocketTask(with: url)
         ws.resume()
@@ -64,42 +79,37 @@ public class ExpoMetaGlassesModule: Module {
         self.isStreaming = true
         self.frameCount = 0
 
+        self.videoFrameListenerToken = session.videoFramePublisher.listen { [weak self] frame in
+          guard let self = self, self.isStreaming else { return }
+
+          // TODO: If makeUIImage() is unavailable in the pinned SDK, map raw frame buffers to JPEG first.
+          guard let image = frame.makeUIImage(), let jpegData = image.jpegData(compressionQuality: 0.65) else {
+            return
+          }
+
+          self.frameCount += 1
+          if self.frameCount % 10 == 0 {
+            self.emitPreviewThumbnail(from: image)
+          }
+
+          Task {
+            await self.sendFrameOverWebSocket(jpegData)
+          }
+        }
+
         // Start streaming
-        try await session.start()
+        await session.start()
         self.sendEvent("onStreamingStatusChanged", ["status": "streaming"])
 
         // Listen for WS acks in background
         self.listenForWsMessages()
-
-        // Process video frames
-        for await frame in session.videoFrames() {
-          guard self.isStreaming else { break }
-
-          let frameData = frame.data
-
-          // Send binary frame over WebSocket
-          let message = URLSessionWebSocketTask.Message.data(frameData)
-          try await ws.send(message)
-
-          // Every 10th frame, emit a preview thumbnail
-          self.frameCount += 1
-          if self.frameCount % 10 == 0 {
-            self.emitPreviewThumbnail(from: frameData)
-          }
-        }
       } catch {
-        self.isStreaming = false
-        self.sendEvent("onStreamingStatusChanged", ["status": "error"])
+        await self.stopStreamingInternal(status: "error")
       }
     }
 
     AsyncFunction("stopStreaming") {
-      self.isStreaming = false
-      try await self.streamSession?.stop()
-      self.streamSession = nil
-      self.webSocket?.cancel(with: .goingAway, reason: nil)
-      self.webSocket = nil
-      self.sendEvent("onStreamingStatusChanged", ["status": "stopped"])
+      await self.stopStreamingInternal(status: "stopped")
     }
   }
 
@@ -149,8 +159,7 @@ public class ExpoMetaGlassesModule: Module {
 
   // MARK: - Preview Thumbnail
 
-  private func emitPreviewThumbnail(from frameData: Data) {
-    guard let image = UIImage(data: frameData) else { return }
+  private func emitPreviewThumbnail(from image: UIImage) {
     let scale = 180.0 / max(image.size.width, 1)
     let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
     UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
@@ -161,5 +170,26 @@ public class ExpoMetaGlassesModule: Module {
       let base64 = jpegData.base64EncodedString()
       self.sendEvent("onPreviewFrame", ["base64": base64])
     }
+  }
+
+  private func sendFrameOverWebSocket(_ frameData: Data) async {
+    guard self.isStreaming, let ws = self.webSocket else { return }
+
+    do {
+      let message = URLSessionWebSocketTask.Message.data(frameData)
+      try await ws.send(message)
+    } catch {
+      await self.stopStreamingInternal(status: "error")
+    }
+  }
+
+  private func stopStreamingInternal(status: String) async {
+    self.isStreaming = false
+    self.videoFrameListenerToken = nil
+    await self.streamSession?.stop()
+    self.streamSession = nil
+    self.webSocket?.cancel(with: .goingAway, reason: nil)
+    self.webSocket = nil
+    self.sendEvent("onStreamingStatusChanged", ["status": status])
   }
 }

@@ -1,10 +1,11 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Animated, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Animated, TouchableOpacity, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { Fonts } from '@/constants/theme';
 import { useBluetooth } from '@/hooks/use-bluetooth';
+import { useGlasses } from '@/hooks/useGlasses';
 import { CircularScoreRing } from '@/components/ui/circular-score-ring';
 
 function WorkoutIcon() {
@@ -70,8 +71,11 @@ const INTERVENTIONS: {
 export default function HomeScreen() {
   const router = useRouter();
   const { isAutoSyncing, isDownloading, downloadProgress, connectionState, requestQueue, setAutoSync, deviceStatus } = useBluetooth();
+  const { previewFrame, lastCaption, streamingStatus } = useGlasses();
   const isSyncing = isAutoSyncing || isDownloading;
   const progress = downloadProgress ?? 0;
+  const hasGlassesPreview = streamingStatus === 'streaming' || previewFrame !== null || lastCaption !== null;
+  const previewUri = previewFrame ? `data:image/jpeg;base64,${previewFrame}` : null;
 
   const opacity = React.useRef(new Animated.Value(0)).current;
 
@@ -112,11 +116,29 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
+        {hasGlassesPreview ? (
+          <View style={styles.glassesPreviewCard}>
+            {previewUri ? (
+              <Image source={{ uri: previewUri }} style={styles.glassesPreviewImage} />
+            ) : (
+              <View style={[styles.glassesPreviewImage, styles.glassesPreviewPlaceholder]}>
+                <Ionicons name="camera-outline" size={22} color="#2B2B2B" />
+              </View>
+            )}
+            <View style={styles.glassesPreviewContent}>
+              <Text style={styles.glassesPreviewTitle}>Live Glasses Feed</Text>
+              <Text style={styles.glassesPreviewCaption} numberOfLines={2}>
+                {lastCaption ?? (streamingStatus === 'streaming' ? 'Waiting for caption...' : 'Connecting to stream...')}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Spacer for decorative area */}
-        <View style={{ height: 140 }} />
+        <View style={{ height: hasGlassesPreview ? 80 : 140 }} />
 
         {/* Day's score label */}
-        <Text style={styles.dayScoreLabel}>your day's score</Text>
+        <Text style={styles.dayScoreLabel}>{"your day's score"}</Text>
 
         {/* Large score */}
         <Text style={styles.scoreText}>
@@ -220,6 +242,42 @@ const styles = StyleSheet.create({
     height: 5,
     backgroundColor: '#8AA97C',
     borderRadius: 3,
+  },
+  glassesPreviewCard: {
+    marginTop: 20,
+    backgroundColor: '#F2F1ED',
+    borderRadius: 14,
+    borderWidth: 0.4,
+    borderColor: '#D7D7D7',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  glassesPreviewImage: {
+    width: 76,
+    height: 76,
+    borderRadius: 10,
+    backgroundColor: '#D9D9D9',
+  },
+  glassesPreviewPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glassesPreviewContent: {
+    flex: 1,
+  },
+  glassesPreviewTitle: {
+    fontSize: 12,
+    fontFamily: Fonts.sansMedium,
+    color: '#2B2B2B',
+    marginBottom: 4,
+  },
+  glassesPreviewCaption: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: Fonts.sans,
+    color: '#2B2B2B',
   },
   dayScoreLabel: {
     fontSize: 16,
