@@ -26,18 +26,18 @@ public class ExpoMetaGlassesModule: Module {
     }
 
     AsyncFunction("startRegistration") {
-      try Wearables.shared.startRegistration()
+      try await Wearables.shared.startRegistration()
       self.observeRegistrationState()
       self.observeDevices()
     }
 
     AsyncFunction("stopRegistration") {
-      try Wearables.shared.startUnregistration()
+      try await Wearables.shared.startUnregistration()
     }
 
     AsyncFunction("handleUrl") { (urlString: String) in
       guard let url = URL(string: urlString) else { return }
-      try await Wearables.shared.handleUrl(url)
+      _ = try await Wearables.shared.handleUrl(url)
     }
 
     AsyncFunction("startStreaming") { (deviceId: String, wsUrl: String) in
@@ -46,20 +46,22 @@ public class ExpoMetaGlassesModule: Module {
       self.sendEvent("onStreamingStatusChanged", ["status": "starting"])
 
       do {
-        // Find the device
-        guard let device = Wearables.shared.devices.first(where: { $0.identifier == deviceId }) else {
+        // In DAT 0.4+, Wearables.shared.devices is [DeviceIdentifier] (String).
+        guard let deviceIdentifier = Wearables.shared.devices.first(where: { $0 == deviceId }) else {
           self.sendEvent("onStreamingStatusChanged", ["status": "error"])
           return
         }
 
         // TODO: If this project is pinned to an older DAT SDK, migrate to this 0.4+ raw-frame API.
-        let config = StreamSessionConfig(
-          videoCodec: VideoCodec.raw,
-          resolution: StreamingResolution.low,
-          frameRate: 24
-        )
-        let deviceSelector = SpecificDeviceSelector(device: device)
-        let session = StreamSession(streamSessionConfig: config, deviceSelector: deviceSelector)
+        let session = await MainActor.run {
+          let config = StreamSessionConfig(
+            videoCodec: VideoCodec.raw,
+            resolution: StreamingResolution.low,
+            frameRate: 3
+          )
+          let deviceSelector = SpecificDeviceSelector(device: deviceIdentifier)
+          return StreamSession(streamSessionConfig: config, deviceSelector: deviceSelector)
+        }
         self.streamSession = session
 
         let cameraStatus = try await Wearables.shared.checkPermissionStatus(.camera)
@@ -79,21 +81,23 @@ public class ExpoMetaGlassesModule: Module {
         self.isStreaming = true
         self.frameCount = 0
 
-        self.videoFrameListenerToken = session.videoFramePublisher.listen { [weak self] frame in
-          guard let self = self, self.isStreaming else { return }
+        self.videoFrameListenerToken = await MainActor.run {
+          session.videoFramePublisher.listen { [weak self] frame in
+            guard let self = self, self.isStreaming else { return }
 
-          // TODO: If makeUIImage() is unavailable in the pinned SDK, map raw frame buffers to JPEG first.
-          guard let image = frame.makeUIImage(), let jpegData = image.jpegData(compressionQuality: 0.65) else {
-            return
-          }
+            // TODO: If makeUIImage() is unavailable in the pinned SDK, map raw frame buffers to JPEG first.
+            guard let image = frame.makeUIImage(), let jpegData = image.jpegData(compressionQuality: 0.65) else {
+              return
+            }
 
-          self.frameCount += 1
-          if self.frameCount % 10 == 0 {
-            self.emitPreviewThumbnail(from: image)
-          }
+            self.frameCount += 1
+            if self.frameCount % 10 == 0 {
+              self.emitPreviewThumbnail(from: image)
+            }
 
-          Task {
-            await self.sendFrameOverWebSocket(jpegData)
+            Task {
+              await self.sendFrameOverWebSocket(jpegData)
+            }
           }
         }
 
@@ -118,19 +122,44 @@ public class ExpoMetaGlassesModule: Module {
   private func observeRegistrationState() {
     Task {
       for await state in Wearables.shared.registrationStateStream() {
-        self.sendEvent("onRegistrationStateChanged", ["state": String(describing: state)])
+        self.sendEvent("onRegistrationStateChanged", ["state": self.mapRegistrationState(state)])
       }
     }
   }
 
   private func observeDevices() {
     Task {
-      for await devices in Wearables.shared.devicesStream() {
-        let mapped = devices.map { d in
-          ["id": d.identifier, "name": d.name, "modelName": d.modelName]
+      for await deviceIds in Wearables.shared.devicesStream() {
+        let mapped: [[String: String]] = deviceIds.map { deviceId in
+          if let device = Wearables.shared.deviceForIdentifier(deviceId) {
+            return [
+              "id": deviceId,
+              "name": device.nameOrId(),
+              "modelName": device.deviceType().rawValue,
+            ]
+          }
+
+          return [
+            "id": deviceId,
+            "name": deviceId,
+            "modelName": DeviceType.unknown.rawValue,
+          ]
         }
         self.sendEvent("onDevicesChanged", ["devices": mapped])
       }
+    }
+  }
+
+  private func mapRegistrationState(_ state: RegistrationState) -> String {
+    switch state {
+    case .registered:
+      return "registered"
+    case .registering:
+      return "registering"
+    case .available, .unavailable:
+      return "unregistered"
+    @unknown default:
+      return "unregistered"
     }
   }
 

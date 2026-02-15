@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'Bridges Meta Ray-Ban glasses camera streaming to React Native'
   s.author         = ''
   s.homepage       = 'https://docs.expo.dev/modules/'
-  s.platforms      = { :ios => '15.2' }
+  s.platforms      = { :ios => '15.1' }
   s.source         = { git: '' }
   s.swift_version  = '5.9'
 
