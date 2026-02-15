@@ -38,6 +38,7 @@ Worker secrets for vision inference:
 - `FORESIGHT_MODAL_APP_NAME` (optional override)
 - `FORESIGHT_MODAL_CLASS_NAME` (optional override)
 - `WORKER_BASE_URL` (auto-derived from Cloudflare API in CD; used by container to POST captions back to Worker)
+- `OPENAI_API_KEY` (used by the intervention cron to call gpt-4o-mini)
 
 CD deploy order (`.github/workflows/deploy-backend.yml`):
 
@@ -59,6 +60,12 @@ Two D1 tables store time-windowed data for downstream LLM batch processing:
 - `caption_windows` — vision captions from Modal VLM inference (migration `0002`)
 
 Both use `window_id` as an idempotency key (`INSERT OR IGNORE` on `UNIQUE(window_id)`).
+
+- `interventions` — intervention decisions from the 1-minute cron loop (migration `0003`). Stores `decision` (yes/no), `reasoning`, input row IDs (`biometric_ids`/`caption_ids` as JSON arrays), `model`, and token usage.
+
+### cron trigger
+
+A Worker cron fires every minute (`* * * * *`). It queries the last minute of `biometric_windows` and `caption_windows`, calls OpenAI `gpt-4o-mini` for a binary intervention decision, and inserts the result into `interventions`. Skips the OpenAI call if no recent data exists.
 
 ### testing the caption upload endpoint in prod
 

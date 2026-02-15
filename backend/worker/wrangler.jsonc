@@ -30,6 +30,9 @@
       "tag": "v1"
     }
   ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

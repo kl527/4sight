@@ -47,6 +47,7 @@ export default {
       FORESIGHT_MODAL_TOKEN_SECRET: string;
       FORESIGHT_MODAL_APP_NAME: string;
       FORESIGHT_MODAL_CLASS_NAME: string;
+      OPENAI_API_KEY: string;
     },
   ): Promise<Response> {
     const url = new URL(request.url);
@@ -135,4 +136,125 @@ export default {
     const proxied = new Request(request, { headers });
     return container.fetch(proxied);
   },
+
+  async scheduled(
+    _event: ScheduledEvent,
+    env: {
+      DB: D1Database;
+      OPENAI_API_KEY: string;
+    },
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(runInterventionCheck(env));
+  },
 };
+
+async function runInterventionCheck(env: {
+  DB: D1Database;
+  OPENAI_API_KEY: string;
+}): Promise<void> {
+  try {
+    const biometrics = await env.DB.prepare(
+      `SELECT id, window_id, features, risk, quality_score, created_at
+       FROM biometric_windows
+       WHERE created_at >= datetime('now', '-1 minute')`
+    ).all();
+
+    const captions = await env.DB.prepare(
+      `SELECT id, window_id, caption, chunk_start_s, chunk_end_s, created_at
+       FROM caption_windows
+       WHERE created_at >= datetime('now', '-1 minute')`
+    ).all();
+
+    if (biometrics.results.length === 0 && captions.results.length === 0) {
+      console.log("intervention cron: no recent data, skipping");
+      return;
+    }
+
+    console.log(
+      `intervention cron: ${biometrics.results.length} biometric rows, ${captions.results.length} caption rows`
+    );
+
+    const systemPrompt = `You are 4sight, a brutally honest AI health agent. You observe real-time biometrics and food intake via smart glasses.
+
+Your job: decide whether to intervene RIGHT NOW with a fear-driven health nudge.
+
+Intervene ("yes") when you see something actionable — unhealthy food, dangerous vitals, sedentary behavior.
+Skip ("no") when data is unremarkable or you already intervened recently.
+
+Respond with JSON only: {"decision": "yes" or "no", "reasoning": "one sentence"}`;
+
+    const userMessage = JSON.stringify({
+      biometrics: biometrics.results,
+      captions: captions.results,
+    });
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        max_tokens: 100,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(
+        `intervention cron: OpenAI API error ${response.status}`,
+        await response.text()
+      );
+      return;
+    }
+
+    const completion = (await response.json()) as {
+      choices: { message: { content: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+
+    const raw = completion.choices?.[0]?.message?.content ?? "";
+    const usage = completion.usage;
+
+    let decision: string;
+    let reasoning: string | null = null;
+
+    try {
+      const parsed = JSON.parse(raw) as { decision: string; reasoning?: string };
+      decision = parsed.decision === "yes" ? "yes" : "no";
+      reasoning = parsed.reasoning ?? null;
+    } catch {
+      // Fallback: substring match
+      decision = raw.toLowerCase().includes('"yes"') ? "yes" : "no";
+      reasoning = raw.slice(0, 200);
+    }
+
+    const biometricIds = JSON.stringify(biometrics.results.map((r) => r.id));
+    const captionIds = JSON.stringify(captions.results.map((r) => r.id));
+
+    await env.DB.prepare(
+      `INSERT INTO interventions (decision, reasoning, biometric_ids, caption_ids, model, prompt_tokens, completion_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        decision,
+        reasoning,
+        biometricIds,
+        captionIds,
+        "gpt-4o-mini",
+        usage?.prompt_tokens ?? null,
+        usage?.completion_tokens ?? null,
+      )
+      .run();
+
+    console.log(`intervention cron: decision=${decision}, reasoning=${reasoning}`);
+  } catch (err) {
+    console.error("intervention cron: unhandled error", err);
+  }
+}
