@@ -382,9 +382,11 @@ class BluetoothManagerClass {
       (d) => d.id === device.id,
     );
     if (idx >= 0) {
-      this.state.discoveredDevices[idx] = bleDevice;
+      this.state.discoveredDevices = this.state.discoveredDevices.map((d, i) =>
+        i === idx ? bleDevice : d,
+      );
     } else {
-      this.state.discoveredDevices.push(bleDevice);
+      this.state.discoveredDevices = [...this.state.discoveredDevices, bleDevice];
       this.log(`Found: ${bleDevice.name} (${bleDevice.id})`);
     }
     this.emit({ type: "deviceDiscovered", device: bleDevice });

@@ -88,34 +88,32 @@ export default function PairingScreen() {
     }
   }, [glasses.streamingStatus]);
 
-  // Start recording (if not already) and navigate to tabs when connected
-  const hasNavigated = useRef(false);
+  // Start recording when watch connects
+  const hasStartedRecording = useRef(false);
   useEffect(() => {
-    if (!isConnected || !bt.deviceStatus || hasNavigated.current) return;
-    hasNavigated.current = true;
+    if (!isConnected || !bt.deviceStatus || hasStartedRecording.current) return;
+    hasStartedRecording.current = true;
 
     if (!bt.deviceStatus.recordingMode) {
       bt.startRecording();
     }
-
-    router.replace('/(tabs)');
   }, [isConnected, bt.deviceStatus]);
 
-  useEffect(() => {
-    if (glasses.streamingStatus !== 'streaming' || hasNavigated.current) return;
-    hasNavigated.current = true;
+  const eitherConnected = isConnected || isGlassesStreaming;
+
+  const handleSkip = () => {
     router.replace('/(tabs)');
-  }, [glasses.streamingStatus, router]);
+  };
 
   // Animate card background
   useEffect(() => {
-    const target = isConnecting ? 2 : isScanning ? 1 : 0;
+    const target = isConnected ? 2 : isConnecting ? 2 : isScanning ? 1 : 0;
     Animated.timing(cardBgAnim, {
       toValue: target,
       duration: 300,
       useNativeDriver: false,
     }).start();
-  }, [isScanning, isConnecting]);
+  }, [isScanning, isConnecting, isConnected]);
 
   useEffect(() => {
     const target = glassesBusy ? 2 : isGlassesStreaming || glasses.registrationState === 'registered' ? 1 : 0;
@@ -247,6 +245,15 @@ export default function PairingScreen() {
             </Animated.View>
           </TouchableOpacity>
         </View>
+
+          {eitherConnected && (
+            <TouchableOpacity onPress={handleSkip} activeOpacity={0.7}>
+              <View style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+                <Ionicons name="arrow-forward" size={18} color="#1B1B1B" />
+              </View>
+            </TouchableOpacity>
+          )}
       </View>
     </View>
   );
@@ -292,4 +299,18 @@ const styles = StyleSheet.create({
     color: '#1B1B1B',
   },
   buttonDisabled: { opacity: 0.5 },
+  skipButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+  },
+  skipButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1B1B1B',
+  },
 });
