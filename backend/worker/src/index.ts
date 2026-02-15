@@ -186,9 +186,7 @@ Skip ("no") when data is unremarkable or you already intervened recently.
 
 When decision is "yes", include a "nudge" field: an instruction for our messaging AI agent describing what bad behavior was observed, the estimated lifespan impact (e.g. "-45 minutes"), the desired tone (fear-driven, guilt-tripping, urgent), and a suggested corrective action. This nudge will be forwarded as-is to deliver an iMessage to the user.
 
-Respond with JSON only:
-- If yes: {"decision": "yes", "reasoning": "one sentence", "nudge": "instruction for messaging agent"}
-- If no: {"decision": "no", "reasoning": "one sentence"}`;
+Respond with the structured output schema provided.`;
 
     const userMessage = JSON.stringify({
       biometrics: biometrics.results,
@@ -209,6 +207,23 @@ Respond with JSON only:
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "intervention_decision",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                decision: { type: "string", enum: ["yes", "no"] },
+                reasoning: { type: "string" },
+                nudge: { type: ["string", "null"] },
+              },
+              required: ["decision", "reasoning", "nudge"],
+              additionalProperties: false,
+            },
+          },
+        },
       }),
     });
 
@@ -228,20 +243,10 @@ Respond with JSON only:
     const raw = completion.choices?.[0]?.message?.content ?? "";
     const usage = completion.usage;
 
-    let decision: string;
-    let reasoning: string | null = null;
-    let nudge: string | null = null;
-
-    try {
-      const parsed = JSON.parse(raw) as { decision: string; reasoning?: string; nudge?: string };
-      decision = parsed.decision === "yes" ? "yes" : "no";
-      reasoning = parsed.reasoning ?? null;
-      nudge = parsed.nudge ?? null;
-    } catch {
-      // Fallback: substring match
-      decision = raw.toLowerCase().includes('"yes"') ? "yes" : "no";
-      reasoning = raw.slice(0, 200);
-    }
+    const parsed = JSON.parse(raw) as { decision: "yes" | "no"; reasoning: string; nudge: string | null };
+    const decision = parsed.decision;
+    const reasoning = parsed.reasoning;
+    const nudge = parsed.nudge;
 
     const biometricIds = JSON.stringify(biometrics.results.map((r) => r.id));
     const captionIds = JSON.stringify(captions.results.map((r) => r.id));
