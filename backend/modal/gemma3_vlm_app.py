@@ -79,6 +79,7 @@ class Gemma3VLMSession:
         from transformers import AutoProcessor, Gemma3ForConditionalGeneration, set_seed
 
         set_seed(42)
+        torch.set_float32_matmul_precision("high")
         torch._dynamo.config.suppress_errors = True
 
         self.cv2 = cv2
